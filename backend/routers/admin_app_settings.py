@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,13 +25,13 @@ from services.app_settings_service import (
     save_setting,
 )
 from services.panel_auth import ensure_schema
+from services import supabase_storage as s3store
 
 logger = logging.getLogger(__name__)
 
 admin_router = APIRouter(prefix="/api/v1/admin/app-settings", tags=["app-settings"])
 public_router = APIRouter(prefix="/api/v1/public/app-settings", tags=["public-app-settings"])
 
-BRAND_UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploads" / "brand"
 
 
 def _actor(user: UserResponse) -> str:
@@ -59,17 +59,12 @@ async def public_brand_file(object_key: str):
     safe = object_key.replace("\\", "/").lstrip("/")
     if ".." in safe.split("/"):
         raise HTTPException(status_code=400, detail="مسار غير صالح")
-    path = (BRAND_UPLOAD_ROOT / safe).resolve()
-    if not str(path).startswith(str(BRAND_UPLOAD_ROOT.resolve())):
-        raise HTTPException(status_code=400, detail="مسار غير صالح")
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="الملف غير موجود")
-    from fastapi.responses import FileResponse
-
-    resp = FileResponse(path)
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Cache-Control"] = "public, max-age=86400"
-    return resp
+    # Accept legacy bare filenames and brand/… keys
+    storage_key = s3store.normalize_brand_key(Path(safe).name if "/" not in safe else safe)
+    try:
+        return RedirectResponse(url=s3store.public_object_url(storage_key), status_code=302)
+    except s3store.SupabaseStorageError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @admin_router.get("/brand")
@@ -173,15 +168,24 @@ async def upload_brand_asset(
     file: UploadFile = File(...),
     current_user: UserResponse = Depends(require_permission("manage_brand_settings")),
 ):
-    BRAND_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "logo.png").suffix.lower() or ".png"
     if ext not in {".png", ".jpg", ".jpeg", ".svg", ".webp", ".ico"}:
         raise HTTPException(status_code=400, detail="صيغة الملف غير مدعومة")
     name = f"{uuid.uuid4().hex}{ext}"
-    dest = BRAND_UPLOAD_ROOT / name
+    storage_key = s3store.normalize_brand_key(name)
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="الحد الأقصى 5MB")
-    dest.write_bytes(content)
+    try:
+        await s3store.upload_bytes(
+            storage_key,
+            content,
+            content_type=file.content_type,
+            upsert=True,
+        )
+    except s3store.SupabaseStorageError as e:
+        logger.error("Brand upload to Supabase failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    # Keep same API URL shape so existing brand settings continue to work
     url = f"/api/v1/public/app-settings/brand-file/{name}"
     return {"success": True, "url": url, "uploaded_by": _actor(current_user)}

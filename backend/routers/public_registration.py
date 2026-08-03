@@ -1,12 +1,11 @@
-"""Public registration + local file upload — no authentication required."""
+"""Public registration + Supabase Storage uploads — no authentication required."""
 import logging
 import re
-import uuid
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,26 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from core.database import get_db
 from models.registrations import Registrations
+from services import supabase_storage as s3store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/public", tags=["public-registration"])
 
-UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploads" / "business-images"
 SAFE_KEY = re.compile(r"^registrations/[A-Za-z0-9._\-]+$")
 
 
-def _ensure_upload_dir():
-    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-
-
-def _safe_object_path(object_key: str) -> Path:
-    if not SAFE_KEY.match(object_key):
+def _safe_registration_key(object_key: str) -> str:
+    key = s3store.normalize_business_key(object_key)
+    if not SAFE_KEY.match(key):
         raise HTTPException(status_code=400, detail="مسار الملف غير صالح")
-    path = (UPLOAD_ROOT / object_key).resolve()
-    if not str(path).startswith(str(UPLOAD_ROOT.resolve())):
-        raise HTTPException(status_code=400, detail="مسار الملف غير صالح")
-    return path
+    return key
 
 
 class UploadUrlRequest(BaseModel):
@@ -49,7 +42,7 @@ class UploadUrlResponse(BaseModel):
 
 @router.post("/upload-url", response_model=UploadUrlResponse)
 async def get_public_upload_url(data: UploadUrlRequest, request: Request):
-    """Return a local upload URL (no Atoms OSS required)."""
+    """Return backend upload URL (stores file in Supabase Storage bucket `uploads`)."""
     if data.bucket_name != "business-images":
         raise HTTPException(status_code=403, detail="غير مسموح برفع الملفات إلى هذا المخزن")
     if not data.object_key.startswith("registrations/"):
@@ -77,26 +70,23 @@ async def upload_file_local(
     request: Request,
     object_key: str = Query(...),
 ):
-    """Accept raw file bytes (PUT) for local storage."""
-    _ensure_upload_dir()
-    filename = Path(object_key).name
-    safe_name = re.sub(r"[^A-Za-z0-9._\-]", "_", filename)
-    safe_key = f"registrations/{safe_name}"
-    path = _safe_object_path(safe_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
+    """Accept raw file bytes (PUT) → Supabase Storage uploads/registrations/."""
+    safe_key = _safe_registration_key(object_key)
     try:
         content = await request.body()
         if not content:
             raise HTTPException(status_code=400, detail="الملف فارغ")
         if len(content) > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="الحد الأقصى 5MB")
-        path.write_bytes(content)
+        await s3store.upload_bytes(safe_key, content, upsert=True)
         return {"success": True, "object_key": safe_key, "size": len(content)}
     except HTTPException:
         raise
+    except s3store.SupabaseStorageError as e:
+        logger.error("Supabase upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Local upload failed: {e}", exc_info=True)
+        logger.error(f"Upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="فشل في رفع الملف")
 
 
@@ -105,37 +95,39 @@ async def upload_file_multipart(
     object_key: str = Query(...),
     file: UploadFile = File(...),
 ):
-    """Accept multipart upload for local storage."""
-    _ensure_upload_dir()
-    filename = Path(object_key).name
-    safe_name = re.sub(r"[^A-Za-z0-9._\-]", "_", filename)
-    safe_key = f"registrations/{safe_name}"
-    path = _safe_object_path(safe_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Accept multipart upload → Supabase Storage uploads/registrations/."""
+    safe_key = _safe_registration_key(object_key)
     try:
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="الملف فارغ")
         if len(content) > 5 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="الحد الأقصى 5MB")
-        path.write_bytes(content)
+        await s3store.upload_bytes(
+            safe_key,
+            content,
+            content_type=file.content_type,
+            upsert=True,
+        )
         return {"success": True, "object_key": safe_key, "size": len(content)}
     except HTTPException:
         raise
+    except s3store.SupabaseStorageError as e:
+        logger.error("Supabase multipart upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Local multipart upload failed: {e}", exc_info=True)
+        logger.error(f"Multipart upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="فشل في رفع الملف")
 
 
 @router.get("/files/{object_key:path}")
 async def get_local_file(object_key: str):
-    """Serve locally uploaded registration images."""
-    if not object_key.startswith("registrations/"):
-        object_key = f"registrations/{object_key}"
-    path = _safe_object_path(object_key)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="الملف غير موجود")
-    return FileResponse(path)
+    """Serve registration images from Supabase Storage (redirect to public URL)."""
+    safe_key = _safe_registration_key(object_key)
+    try:
+        return RedirectResponse(url=s3store.public_object_url(safe_key), status_code=302)
+    except s3store.SupabaseStorageError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class PublicRegistrationRequest(BaseModel):

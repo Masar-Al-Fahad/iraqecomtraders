@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     oss_service_url: str = ""
     oss_api_key: str = ""
 
+    # Supabase Storage (public bucket "uploads")
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    supabase_anon_key: str = ""
+    supabase_storage_bucket: str = "uploads"
+
     # AWS Lambda Configuration
     is_lambda: bool = False
     lambda_function_name: str = "fastapi-backend"

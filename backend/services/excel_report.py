@@ -49,7 +49,6 @@ LOGO_CANDIDATES = [
     Path(__file__).resolve().parent.parent / "assets" / "brand" / "mfec-logo.png",
     Path(__file__).resolve().parent.parent / "static" / "brand" / "mfec-logo.png",
 ]
-UPLOAD_BRAND = Path(__file__).resolve().parent.parent / "uploads" / "brand"
 
 
 def _hex(color: str, fallback: str) -> str:
@@ -58,13 +57,49 @@ def _hex(color: str, fallback: str) -> str:
 
 
 def _logo_path(brand: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    """Resolve a local temp/path for Excel logo embedding.
+
+    Prefer downloading brand-file assets from Supabase Storage public URL.
+    Fall back to bundled static logos.
+    """
+    import tempfile
+
+    from services import supabase_storage as s3store
+
     brand = brand or {}
     logo = brand.get("report_logo") or brand.get("system_logo") or ""
+
+    # API brand-file → Supabase Storage brand/<name>
     if logo.startswith("/api/v1/public/app-settings/brand-file/"):
         name = logo.rsplit("/", 1)[-1]
-        p = UPLOAD_BRAND / name
-        if p.is_file():
-            return p
+        storage_key = s3store.normalize_brand_key(name)
+        try:
+            # sync download via urllib for openpyxl path convenience
+            public = s3store.public_object_url(storage_key)
+            with urlopen(public, timeout=20) as resp:
+                data = resp.read()
+            if data:
+                suffix = Path(name).suffix or ".png"
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                tmp.write(data)
+                tmp.close()
+                return Path(tmp.name)
+        except Exception:
+            pass
+
+    if logo.startswith("http://") or logo.startswith("https://"):
+        try:
+            with urlopen(logo, timeout=20) as resp:
+                data = resp.read()
+            if data:
+                suffix = Path(urlparse(logo).path).suffix or ".png"
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                tmp.write(data)
+                tmp.close()
+                return Path(tmp.name)
+        except Exception:
+            pass
+
     if logo.startswith("/brand/"):
         p = Path(__file__).resolve().parent.parent.parent / "frontend" / "public" / logo.lstrip("/")
         if p.is_file():
@@ -75,11 +110,6 @@ def _logo_path(brand: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     for p in LOGO_CANDIDATES:
         if p.is_file():
             return p
-    # any uploaded brand file
-    if UPLOAD_BRAND.is_dir():
-        files = sorted(UPLOAD_BRAND.glob("*"))
-        if files:
-            return files[-1]
     return None
 
 
