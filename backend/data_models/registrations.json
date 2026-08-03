@@ -1,0 +1,84 @@
+{
+    "title": "registrations",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "business_name": {
+            "type": "string",
+            "description": "Business name"
+        },
+        "merchant_name": {
+            "type": "string",
+            "description": "Merchant name"
+        },
+        "phone": {
+            "type": "string",
+            "description": "Phone number"
+        },
+        "governorate": {
+            "type": "string",
+            "description": "Governorate"
+        },
+        "area": {
+            "type": "string",
+            "description": "Area"
+        },
+        "business_type": {
+            "type": "string",
+            "description": "Business type"
+        },
+        "image_key": {
+            "type": "string",
+            "description": "Image storage key"
+        },
+        "notes": {
+            "type": "string",
+            "description": "Optional notes"
+        },
+        "status": {
+            "type": "string",
+            "description": "Request status: pending/approved/rejected"
+        },
+        "membership_number": {
+            "type": "string",
+            "description": "Membership number like MF-1"
+        },
+        "membership_status": {
+            "type": "string",
+            "description": "Membership status: active/suspended/expired"
+        },
+        "approved_at": {
+            "type": "string",
+            "description": "Approval date ISO string"
+        },
+        "whatsapp_registration_sent": {
+            "type": "boolean",
+            "description": "WhatsApp registration sent flag"
+        },
+        "whatsapp_approval_sent": {
+            "type": "boolean",
+            "description": "WhatsApp approval sent flag"
+        },
+        "whatsapp_last_attempt": {
+            "type": "string",
+            "description": "Last WhatsApp attempt timestamp"
+        },
+        "whatsapp_status": {
+            "type": "string",
+            "description": "WhatsApp status"
+        }
+    },
+    "required": [
+        "business_name",
+        "merchant_name",
+        "phone",
+        "governorate",
+        "area",
+        "business_type",
+        "image_key",
+        "status"
+    ]
+}

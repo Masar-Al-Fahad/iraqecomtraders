@@ -1,0 +1,41 @@
+# Secrets / local env
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Python
+backend/.venv/
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+frontend/node_modules/
+**/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local databases & uploads
+backend/local_app.db
+backend/local_app.db-*
+**/*.db
+backend/uploads/
+backend/logs/
+**/_uvicorn_*.log
+**/_vite_*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Misc local
+.mgx/
+backend/_supabase_winning_host.txt

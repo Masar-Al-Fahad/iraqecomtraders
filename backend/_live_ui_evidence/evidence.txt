@@ -1,0 +1,24 @@
+PROJECT=C:\Users\hp\Downloads\atoms traders\v7
+DATABASE=C:\Users\hp\Downloads\atoms traders\v7\backend\local_app.db
+FRONTEND=http://127.0.0.1:5173
+BACKEND=http://127.0.0.1:8000
+TEST_USER=belo delete=False perms={'view': True, 'add': True, 'edit': True, 'delete': False, 'export': True, 'manage_users': False}
+UI_LOGGED_IN_AS=belo token_present=True url=http://127.0.0.1:5173/admin
+DELETE_BUTTONS title=حذف count=0 text=حذف count=0
+DELETE_403_RESPONSE status=403 body={"detail":"ليس لديك صلاحية لتنفيذ هذا الإجراء."}
+DB_ROW_BEFORE=1 AFTER=1 (must stay 1)
+DB[before] counter=9 rows=[(1, 'MF-0002'), (3, 'MF-0004'), (4, 'MF-0005'), (5, 'MF-0006'), (6, 'MF-0009')]
+MAX_BEFORE=MF-0009 WILL_DELETE=MF-0002 id=1
+ADMIN_UI_DELETE status=200 body={"message":"تم حذف الطلب بنجاح","id":1}
+MEMBERSHIP_BEFORE_MAX=MF-0009 DELETED=MF-0002 NEW=MF-0010 EXPECTED=MF-0010
+DB[after] counter=10 rows=[(3, 'MF-0004'), (4, 'MF-0005'), (5, 'MF-0006'), (6, 'MF-0009'), (8, 'MF-0010')]
+EXCEL_FETCH_FROM_UI status=200 ctype=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet size=6108 sig=[80, 75]
+EXCEL_FILE=C:\Users\hp\Downloads\atoms traders\v7\backend\_live_ui_evidence\downloads\members_live_ui.xlsx size=6108 opened=OK rtl=True freeze=A2 filter=A1:N7 headerB1=رقم العضوية
+EXCEL_BUTTON_VISIBLE=True
+EXCEL_UI_DOWNLOAD name=members_2026-08-03.xlsx path=C:\Users\hp\Downloads\atoms traders\v7\backend\_live_ui_evidence\downloads\members_2026-08-03.xlsx size=6108
+SORT_URL http://127.0.0.1:8000/api/v1/admin/registrations?skip=0&limit=20&sort=-created_at&sort_by=created_at&sort_order=desc
+SORT_URL http://127.0.0.1:8000/api/v1/admin/registrations?skip=0&limit=20&sort=membership_number&sort_by=membership_number&sort_order=asc
+SORT_URL http://127.0.0.1:8000/api/v1/admin/registrations?skip=0&limit=20&sort=-membership_number&sort_by=membership_number&sort_order=desc
+SORT_URL http://127.0.0.1:8000/api/v1/admin/registrations?skip=0&limit=20&sort=merchant_name&sort_by=merchant_name&sort_order=asc
+SORT_URL http://127.0.0.1:8000/api/v1/admin/registrations?skip=0&limit=20&sort=created_at&sort_by=created_at&sort_order=asc
+SORT_PARAMS_OK

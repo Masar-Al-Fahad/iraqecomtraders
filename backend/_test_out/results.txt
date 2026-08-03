@@ -1,0 +1,16 @@
+LOGIN_ADMIN: PASS name=admin super=True
+CREATE_LIMITED_USER: PASS id=3 delete=False
+LOGIN_LIMITED: PASS delete=False edit=True
+TEST1_DELETE_403: status=403 msg=ليس لديك صلاحية لتنفيذ هذا الإجراء. PASS=True
+TEST1b_MANAGE_USERS_403: status=403 msg=ليس لديك صلاحية لتنفيذ هذا الإجراء. PASS=True
+TEST1c_EXPORT_403: status=403 msg=ليس لديك صلاحية لتنفيذ هذا الإجراء. PASS=True
+TEST1d_ENTITIES_DELETE_403: status=403 msg=ليس لديك صلاحية لتنفيذ هذا الإجراء. PASS=True
+TEST2_MF_SEQUENCE: got=MF-0009 expected=MF-0009 deleted=MF-0008 PASS=True
+TEST3_EXCEL: status=200 sig_PK=True rtl=True freeze=A2 filter=A1:N6 rows=6 PASS=True
+TEST4_SORT_ALL: PASS=True
+TEST4b_NUMERIC_MF_ASC: [2, 4, 5, 6, 9] PASS=True
+TEST5_COMBO: status=200 total=0 PASS=True
+TEST6_STATS: status=200 total=5 PASS=True
+TEST6_USERS: status=200 total=4 PASS=True
+TEST6_CHECK_ADMIN: status=200 authorized=True PASS=True
+TEST6_FRONTEND: status=200 PASS=True
