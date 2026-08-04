@@ -212,9 +212,9 @@ async def seed_super_admin(db: Optional[AsyncSession] = None):
     password = (getattr(settings, "super_admin_password", None) or os.getenv("SUPER_ADMIN_PASSWORD") or "").strip()
 
     if not username or not password:
-        logger.warning(
+        logger.error(
             "SUPER_ADMIN_USERNAME / SUPER_ADMIN_PASSWORD not set — skipping super admin seed. "
-            "Set them in .env to enable local admin login."
+            "Set both on the Railway backend service (Variables) and redeploy so admin login works."
         )
         return
 
@@ -250,6 +250,13 @@ async def seed_super_admin(db: Optional[AsyncSession] = None):
         return
 
     if not db_manager.async_session_maker:
+        logger.error(
+            "Database session maker not ready — cannot seed Super Admin. "
+            "Check DATABASE_URL and restart the backend."
+        )
         return
-    async with db_manager.async_session_maker() as session:
-        await _seed(session)
+    try:
+        async with db_manager.async_session_maker() as session:
+            await _seed(session)
+    except Exception as e:
+        logger.error("Super Admin seed failed: %s", e)

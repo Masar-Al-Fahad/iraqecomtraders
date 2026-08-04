@@ -95,10 +95,16 @@ _cors_origins = settings.cors_origins_list or [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
 ]
+# Localhost + Railway preview frontends (*.up.railway.app). Custom domains
+# must still be listed in CORS_ORIGINS / FRONTEND_URL.
+_cors_origin_regex = (
+    r"https?://(localhost|127\.0\.0\.1)(:\d+)?|"
+    r"https://[a-z0-9-]+\.up\.railway\.app"
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

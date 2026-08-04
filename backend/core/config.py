@@ -70,7 +70,20 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        """CORS allow-list: CORS_ORIGINS plus FRONTEND_URL when set."""
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        frontend = (self.frontend_url or "").strip().rstrip("/")
+        if frontend and frontend not in origins:
+            origins.append(frontend)
+        # Deduplicate while preserving order
+        seen = set()
+        unique: List[str] = []
+        for origin in origins:
+            key = origin.rstrip("/")
+            if key not in seen:
+                seen.add(key)
+                unique.append(origin)
+        return unique
 
     class Config:
         case_sensitive = False

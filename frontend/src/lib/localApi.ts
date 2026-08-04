@@ -86,16 +86,33 @@ export const client = {
       window.location.href = '/admin/login';
     },
     async login(username: string, password: string) {
-      const res = await fetch(`${apiBase()}/api/v1/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
+      const base = apiBase();
+      if (!base && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        throw new Error(
+          'API URL is not configured. Rebuild the frontend with VITE_API_BASE_URL set to your Railway backend URL.'
+        );
+      }
+      let res: Response;
+      try {
+        res = await fetch(`${base}/api/v1/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+      } catch {
+        throw new Error(
+          'تعذر الاتصال بالخادم. تحقق من CORS_ORIGINS على الـ Backend وأنه يتضمن رابط الواجهة.'
+        );
+      }
       if (!res.ok) {
         throw Object.assign(new Error(await readError(res)), { status: res.status });
       }
       const data = await res.json();
-      localAuth.setToken(data.token);
+      const token = data?.token || data?.access_token;
+      if (!token || typeof token !== 'string') {
+        throw new Error('استجابة تسجيل الدخول غير صالحة (لا يوجد token)');
+      }
+      localAuth.setToken(token);
       return data;
     },
     async logout() {

@@ -9,10 +9,15 @@ let configLoading = true;
 
 /**
  * Resolve API base URL from environment only — never hardcode production hosts.
+ * Accepts VITE_API_BASE_URL (preferred) or VITE_API_URL (alias).
  * Local fallback keeps development working when env is unset.
  */
 function envApiBase(): string {
-  const fromVite = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+  const fromVite = (
+    (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
+    (import.meta.env.VITE_API_URL as string | undefined)?.trim() ||
+    ''
+  );
   if (fromVite) return fromVite.replace(/\/$/, '');
   // Same-origin / reverse-proxy production (mfec / mfec-admin → API via gateway)
   if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
@@ -58,9 +63,12 @@ export function getConfig() {
       ADMIN_URL: runtimeConfig.ADMIN_URL || defaultConfig.ADMIN_URL,
     };
   }
-  if (import.meta.env.VITE_API_BASE_URL) {
+  const viteApi =
+    (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
+    (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (viteApi) {
     return {
-      API_BASE_URL: String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, ''),
+      API_BASE_URL: viteApi.replace(/\/$/, ''),
       SITE_URL: defaultConfig.SITE_URL,
       ADMIN_URL: defaultConfig.ADMIN_URL,
     };
