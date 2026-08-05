@@ -169,19 +169,33 @@ async def allocate_counter_value(
     ensure_fn,
     format_fn,
 ) -> str:
-    await ensure_fn(db)
-    for _ in range(100000):
-        result = await db.execute(select(SystemCounter).where(SystemCounter.name == name))
-        counter = result.scalar_one_or_none()
-        if counter is None:
-            counter = SystemCounter(name=name, value=0)
-            db.add(counter)
-            await db.flush()
+    """Atomically increment system_counters (no full-table scan of registrations).
 
-        counter.value = int(counter.value or 0) + 1
-        n = int(counter.value)
-        await db.flush()
-        if not await in_use_fn(db, n):
+    Happy path: UPDATE … RETURNING + indexed point existence check.
+    Replaces select-row → mutate → flush → exists (extra round trips).
+    """
+    from sqlalchemy import text
+
+    from services import reg_perf
+
+    for _ in range(100000):
+        with reg_perf.stage("counter_select_increment"):
+            result = await db.execute(
+                text(
+                    "UPDATE system_counters SET value = value + 1 "
+                    "WHERE name = :name RETURNING value"
+                ),
+                {"name": name},
+            )
+            row = result.first()
+            if row is None:
+                with reg_perf.stage("counter_ensure"):
+                    await ensure_fn(db)
+                continue
+            n = int(row[0])
+        with reg_perf.stage("counter_in_use_check"):
+            taken = await in_use_fn(db, n)
+        if not taken:
             code = format_fn(n)
             logger.info("Allocated %s counter=%s -> %s", name, n, code)
             return code

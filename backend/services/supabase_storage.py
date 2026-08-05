@@ -81,6 +81,16 @@ def _headers(content_type: Optional[str] = None, upsert: bool = False) -> dict:
     return h
 
 
+_http_client: Optional[httpx.AsyncClient] = None
+
+
+def _shared_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+    return _http_client
+
+
 async def upload_bytes(
     object_path: str,
     content: bytes,
@@ -94,18 +104,18 @@ async def upload_bytes(
         raise SupabaseStorageError("الملف فارغ")
     ctype = content_type or mimetypes.guess_type(path)[0] or "application/octet-stream"
     url = f"{_base_url()}/storage/v1/object/{bucket_name()}/{path}"
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(url, content=content, headers=_headers(ctype, upsert=upsert))
+    client = _shared_client()
+    resp = await client.post(url, content=content, headers=_headers(ctype, upsert=upsert))
+    if resp.status_code in (200, 201):
+        return path
+    # Some gateways prefer PUT for upsert
+    if resp.status_code in (400, 409, 405):
+        resp = await client.put(url, content=content, headers=_headers(ctype, upsert=True))
         if resp.status_code in (200, 201):
             return path
-        # Some gateways prefer PUT for upsert
-        if resp.status_code in (400, 409, 405):
-            resp = await client.put(url, content=content, headers=_headers(ctype, upsert=True))
-            if resp.status_code in (200, 201):
-                return path
-        raise SupabaseStorageError(
-            f"فشل رفع الملف إلى Supabase Storage ({resp.status_code}): {resp.text[:300]}"
-        )
+    raise SupabaseStorageError(
+        f"فشل رفع الملف إلى Supabase Storage ({resp.status_code}): {resp.text[:300]}"
+    )
 
 
 async def download_bytes(object_path: str) -> Tuple[bytes, str]:

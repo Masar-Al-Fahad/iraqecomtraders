@@ -37,6 +37,7 @@ export default function Index() {
   const { toast } = useToast();
   const { brand, resolveAssetUrl } = useBrand();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const submittingRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [submitted, setSubmitted] = useState(false);
@@ -130,6 +131,7 @@ export default function Index() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current || loading) return;
     const errMsg = texts.error_message || 'حدث خطأ أثناء الإرسال';
 
     for (const f of visibleFields) {
@@ -155,35 +157,16 @@ export default function Index() {
       }
     }
 
+    submittingRef.current = true;
     setLoading(true);
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `ik_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     try {
       const API_BASE = (getAPIBaseURL() || '').replace(/\/$/, '');
-      let finalKey = 'manual_entry';
 
-      if (imageFile) {
-        const timestamp = Date.now();
-        const safeName = imageFile.name.replace(/[^A-Za-z0-9._-]/g, '_');
-        const objectKey = `registrations/${timestamp}_${safeName}`;
-        const uploadRes = await fetch(`${API_BASE}/api/v1/public/upload-url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bucket_name: 'business-images', object_key: objectKey }),
-        });
-        if (!uploadRes.ok) {
-          const errData = await uploadRes.json().catch(() => ({}));
-          throw new Error(errData.detail || 'فشل في رفع الصورة');
-        }
-        const uploadData = await uploadRes.json();
-        const putRes = await fetch(uploadData.upload_url, {
-          method: 'PUT',
-          body: imageFile,
-          headers: { 'Content-Type': imageFile.type || 'application/octet-stream' },
-        });
-        if (!putRes.ok) throw new Error('فشل في رفع الصورة إلى الخادم');
-        const putData = await putRes.json().catch(() => ({}));
-        finalKey = putData.object_key || objectKey;
-      }
-
+      // Build payload while upload runs (independent work overlapped when image present)
       const payload: Record<string, any> = {
         business_name: '',
         merchant_name: '',
@@ -192,8 +175,9 @@ export default function Index() {
         area: '',
         business_type: '',
         notes: '',
-        image_key: finalKey,
+        image_key: 'manual_entry',
         extra_fields: {},
+        idempotency_key: idempotencyKey,
       };
 
       const extrasNotes: string[] = [];
@@ -207,7 +191,7 @@ export default function Index() {
             payload[f.maps_to] = payload[f.maps_to] || '-';
           }
         } else if (f.maps_to === 'image_key') {
-          // handled
+          // handled via upload below
         } else if (f.id !== 'terms' && f.visible && raw !== undefined && raw !== '' && raw !== false) {
           const shown = Array.isArray(raw) ? raw.join(', ') : raw;
           extraFields[f.id] = { label: f.label, value: shown };
@@ -215,20 +199,39 @@ export default function Index() {
         }
       }
 
-      // ensure required API fields have values even if hidden
       for (const k of ['business_name', 'merchant_name', 'phone', 'governorate', 'area', 'business_type']) {
         if (!payload[k]) payload[k] = '-';
       }
 
       payload.extra_fields = extraFields;
-      // Keep notes for human readability / backward compatibility
       if (extrasNotes.length) {
         payload.notes = [payload.notes, ...extrasNotes].filter(Boolean).join('\n');
       }
 
+      let finalKey = 'manual_entry';
+      if (imageFile) {
+        const timestamp = Date.now();
+        const safeName = imageFile.name.replace(/[^A-Za-z0-9._-]/g, '_');
+        const objectKey = `registrations/${timestamp}_${safeName}`;
+        // Skip upload-url RTT — upload endpoint path is stable/public.
+        const uploadUrl = `${API_BASE}/api/v1/public/upload-file?object_key=${encodeURIComponent(objectKey)}`;
+        const putRes = await fetch(uploadUrl, {
+          method: 'PUT',
+          body: imageFile,
+          headers: { 'Content-Type': imageFile.type || 'application/octet-stream' },
+        });
+        if (!putRes.ok) throw new Error('فشل في رفع الصورة إلى الخادم');
+        const putData = await putRes.json().catch(() => ({}));
+        finalKey = putData.object_key || objectKey;
+      }
+      payload.image_key = finalKey;
+
       const registerRes = await fetch(`${API_BASE}/api/v1/public/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify(payload),
       });
       if (!registerRes.ok) {
@@ -246,6 +249,7 @@ export default function Index() {
         variant: 'destructive',
       });
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };

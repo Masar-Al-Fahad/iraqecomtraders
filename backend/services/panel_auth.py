@@ -194,6 +194,7 @@ async def ensure_schema():
                     "CREATE INDEX IF NOT EXISTS ix_registrations_created_at ON registrations (created_at)",
                     "CREATE INDEX IF NOT EXISTS ix_registrations_status_created_at "
                     "ON registrations (status, created_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_registrations_phone ON registrations (phone)",
                 ):
                     try:
                         sync_conn.execute(text(idx_sql))
