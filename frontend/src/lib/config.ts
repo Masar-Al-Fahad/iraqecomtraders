@@ -1,16 +1,14 @@
-// Runtime configuration
-let runtimeConfig: {
-  API_BASE_URL: string;
-  SITE_URL?: string;
-  ADMIN_URL?: string;
-} | null = null;
+/**
+ * API / site URL resolution.
+ * Prefer VITE_API_BASE_URL (or alias VITE_API_URL) baked in at Vite build time.
+ * Do not fetch /api/config — the static frontend has no such route.
+ */
 
-let configLoading = true;
+const PRODUCTION_API_BASE = 'https://iraqecomtraders-production.up.railway.app';
 
 /**
- * Resolve API base URL from environment only — never hardcode production hosts.
- * Accepts VITE_API_BASE_URL (preferred) or VITE_API_URL (alias).
- * Local fallback keeps development working when env is unset.
+ * Resolve API base URL from env, then sensible defaults.
+ * Local → http://127.0.0.1:8000; production → Railway backend.
  */
 function envApiBase(): string {
   const fromVite = (
@@ -19,11 +17,16 @@ function envApiBase(): string {
     ''
   );
   if (fromVite) return fromVite.replace(/\/$/, '');
-  // Same-origin / reverse-proxy production (mfec / mfec-admin → API via gateway)
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return '';
+
+  if (
+    typeof window === 'undefined' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+  ) {
+    return 'http://127.0.0.1:8000';
   }
-  return 'http://127.0.0.1:8000';
+
+  return PRODUCTION_API_BASE;
 }
 
 const defaultConfig = {
@@ -32,47 +35,12 @@ const defaultConfig = {
   ADMIN_URL: (import.meta.env.VITE_ADMIN_URL as string | undefined)?.trim() || '',
 };
 
+/** Kept for startup sequencing in main.tsx — no network call. */
 export async function loadRuntimeConfig(): Promise<void> {
-  try {
-    const response = await fetch('/api/config');
-    if (response.ok) {
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        runtimeConfig = await response.json();
-      }
-    }
-  } catch {
-    // use env / defaults
-  } finally {
-    configLoading = false;
-  }
+  // API base comes from VITE_API_BASE_URL / VITE_API_URL (or production fallback).
 }
 
 export function getConfig() {
-  if (configLoading && !runtimeConfig) {
-    return {
-      API_BASE_URL: envApiBase(),
-      SITE_URL: defaultConfig.SITE_URL,
-      ADMIN_URL: defaultConfig.ADMIN_URL,
-    };
-  }
-  if (runtimeConfig) {
-    return {
-      API_BASE_URL: (runtimeConfig.API_BASE_URL || envApiBase()).replace(/\/$/, ''),
-      SITE_URL: runtimeConfig.SITE_URL || defaultConfig.SITE_URL,
-      ADMIN_URL: runtimeConfig.ADMIN_URL || defaultConfig.ADMIN_URL,
-    };
-  }
-  const viteApi =
-    (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
-    (import.meta.env.VITE_API_URL as string | undefined)?.trim();
-  if (viteApi) {
-    return {
-      API_BASE_URL: viteApi.replace(/\/$/, ''),
-      SITE_URL: defaultConfig.SITE_URL,
-      ADMIN_URL: defaultConfig.ADMIN_URL,
-    };
-  }
   return {
     API_BASE_URL: envApiBase(),
     SITE_URL: defaultConfig.SITE_URL,

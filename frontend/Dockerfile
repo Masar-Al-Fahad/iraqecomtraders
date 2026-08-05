@@ -11,15 +11,16 @@ RUN npm ci
 
 COPY . .
 
-# Railway/build host env is used as-is. Fail fast if API URL missing.
+# Railway/build host env is used as-is.
 # Alias: VITE_API_URL → VITE_API_BASE_URL (Vite only embeds VITE_* at build).
+# Default to the production FastAPI URL when unset so deploys still work.
 RUN set -e; \
     if [ -z "$VITE_API_BASE_URL" ] && [ -n "$VITE_API_URL" ]; then \
       export VITE_API_BASE_URL="$VITE_API_URL"; \
     fi; \
     if [ -z "$VITE_API_BASE_URL" ]; then \
-      echo "ERROR: Set VITE_API_BASE_URL (or VITE_API_URL) to your FastAPI public URL (no trailing slash) before building."; \
-      exit 1; \
+      export VITE_API_BASE_URL="https://iraqecomtraders-production.up.railway.app"; \
+      echo "WARNING: VITE_API_BASE_URL unset; defaulting to ${VITE_API_BASE_URL}"; \
     fi; \
     export VITE_API_BASE_URL="${VITE_API_BASE_URL%/}"; \
     echo "Building frontend with VITE_API_BASE_URL=${VITE_API_BASE_URL}"; \
