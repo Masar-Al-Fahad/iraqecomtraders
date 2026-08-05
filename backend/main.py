@@ -90,29 +90,6 @@ app = FastAPI(
 )
 
 
-# MODULE_MIDDLEWARE_START
-_cors_origins = settings.cors_origins_list or [
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-]
-# Localhost + Railway preview frontends (*.up.railway.app). Custom domains
-# must still be listed in CORS_ORIGINS / FRONTEND_URL.
-_cors_origin_regex = (
-    r"https?://(localhost|127\.0\.0\.1)(:\d+)?|"
-    r"https://[a-z0-9-]+\.up\.railway\.app"
-)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_origin_regex=_cors_origin_regex,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
-# MODULE_MIDDLEWARE_END
-
-
 # Auto-discover and include all routers from the local `routers` package
 def include_routers_from_package(app: FastAPI, package_name: str = "routers") -> None:
     """Discover and include all APIRouter objects from a package.
@@ -210,7 +187,30 @@ def health_check():
     return {"status": "healthy"}
 
 
-def run_in_debug_mode(app: FastAPI):
+# CORS must wrap the full ASGI app (outermost) so error responses from
+# ServerErrorMiddleware also receive Access-Control-Allow-Origin.
+# Do not use allow_origins=["*"] with allow_credentials=True.
+_cors_origins = settings.cors_origins_list
+# Localhost + Railway frontends (*.up.railway.app). Matches
+# https://charismatic-luck-production-e42a.up.railway.app. Custom domains
+# must still be listed in CORS_ORIGINS / FRONTEND_URL.
+_cors_origin_regex = (
+    r"https?://(localhost|127\.0\.0\.1)(:\d+)?|"
+    r"https://[a-z0-9-]+\.up\.railway\.app"
+)
+logging.getLogger(__name__).info("CORS allow_origins=%s", _cors_origins)
+app = CORSMiddleware(
+    app,
+    allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+
+def run_in_debug_mode(app):
     """Run the FastAPI app in debug mode with proper asyncio handling.
 
     This function handles the special case of running in a debugger (PyCharm, VS Code, etc.)

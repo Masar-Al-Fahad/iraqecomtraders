@@ -28,7 +28,10 @@ class Settings(BaseSettings):
 
     # Frontend / CORS
     frontend_url: str = "http://127.0.0.1:5173"
-    cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
+    cors_origins: str = (
+        "http://127.0.0.1:5173,http://localhost:5173,"
+        "https://charismatic-luck-production-e42a.up.railway.app"
+    )
 
     # Super Admin seed (set password in .env — never hardcode)
     super_admin_username: str = "admin"
@@ -68,20 +71,37 @@ class Settings(BaseSettings):
         display_host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
         return os.environ.get("PYTHON_BACKEND_URL", f"http://{display_host}:{self.port}")
 
+    @staticmethod
+    def _normalize_origin(value: str) -> str:
+        """Strip whitespace/quotes/trailing slash so Origin header matching works."""
+        return value.strip().strip('"').strip("'").rstrip("/")
+
     @property
     def cors_origins_list(self) -> List[str]:
-        """CORS allow-list: CORS_ORIGINS plus FRONTEND_URL when set."""
-        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-        frontend = (self.frontend_url or "").strip().rstrip("/")
+        """CORS allow-list: CORS_ORIGINS + FRONTEND_URL + localhost/prod defaults."""
+        # Always keep local dev + known production frontend (exact Origin, no trailing slash).
+        defaults = [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "https://charismatic-luck-production-e42a.up.railway.app",
+        ]
+        origins = [
+            self._normalize_origin(part)
+            for part in (self.cors_origins or "").split(",")
+            if self._normalize_origin(part)
+        ]
+        frontend = self._normalize_origin(self.frontend_url or "")
         if frontend and frontend not in origins:
             origins.append(frontend)
-        # Deduplicate while preserving order
+        for default in defaults:
+            if default not in origins:
+                origins.append(default)
+        # Deduplicate while preserving order (normalized keys, normalized values)
         seen = set()
         unique: List[str] = []
         for origin in origins:
-            key = origin.rstrip("/")
-            if key not in seen:
-                seen.add(key)
+            if origin not in seen:
+                seen.add(origin)
                 unique.append(origin)
         return unique
 

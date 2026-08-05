@@ -381,11 +381,14 @@ async def _async_main() -> int:
     import uvicorn
     from main import app
     from core.database import db_manager
+    from starlette.middleware.cors import CORSMiddleware
 
     # Initialize DB early so we can attach listeners before requests
     await db_manager.init_db()
     _install_sqlalchemy_listeners(db_manager.engine)
-    _install_timing_middleware(app)
+    # main:app may be CORSMiddleware wrapping FastAPI — attach timing to inner app
+    fastapi_app = app.app if isinstance(app, CORSMiddleware) else app
+    _install_timing_middleware(fastapi_app)
 
     port = int(os.environ.get("PORT", "8000"))
     # Use a dedicated measurement port to avoid clashing with a running server
