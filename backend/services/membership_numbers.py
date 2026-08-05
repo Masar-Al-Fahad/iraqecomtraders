@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional, Tuple
+from typing import Optional
 
-from sqlalchemy import Integer, String, Column, select
+from sqlalchemy import Integer, String, Column, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import Base
@@ -36,9 +36,31 @@ def format_application(n: int) -> str:
     return f"REQ-{int(n):04d}"
 
 
-async def _max_existing_number(db: AsyncSession, column, pattern: re.Pattern) -> int:
+async def _max_existing_number(db: AsyncSession, column, pattern: re.Pattern, prefix: str) -> int:
+    """Return max numeric suffix for MF-/REQ- codes via SQL aggregate (no full-table Python scan)."""
+    # substr is 1-based; skip "MF-" / "REQ-" (3 chars) → start at 4
+    num_expr = cast(func.substr(column, 4), Integer)
+    dialect = ""
+    try:
+        conn = await db.connection()
+        dialect = conn.dialect.name
+    except Exception:
+        dialect = ""
+
+    if dialect == "postgresql":
+        # Case-insensitive prefix + digits only (avoids cast errors on junk values)
+        result = await db.execute(
+            select(func.coalesce(func.max(num_expr), 0)).where(
+                column.isnot(None),
+                column != "",
+                column.op("~*")(rf"^{re.escape(prefix)}[0-9]+$"),
+            )
+        )
+        return int(result.scalar() or 0)
+
+    # SQLite / others: LIKE then validate in Python on the matching subset
     result = await db.execute(
-        select(column).where(column.isnot(None), column != "")
+        select(column).where(column.isnot(None), column != "", column.ilike(f"{prefix}%"))
     )
     max_n = 0
     for (raw,) in result.all():
@@ -76,28 +98,44 @@ async def ensure_counter(db: AsyncSession, name: str, seed_from_max: int = 0) ->
     return counter
 
 
-async def ensure_membership_counter(db: AsyncSession) -> None:
-    max_existing = await _max_existing_number(db, Registrations.membership_number, MF_RE)
-    await ensure_counter(db, COUNTER_MEMBERSHIP, max_existing)
+async def ensure_membership_counter(db: AsyncSession) -> SystemCounter:
+    """Return membership counter; seed from MAX(MF-*) only when the row is missing."""
+    result = await db.execute(
+        select(SystemCounter).where(SystemCounter.name == COUNTER_MEMBERSHIP)
+    )
+    counter = result.scalar_one_or_none()
+    if counter is not None:
+        return counter
+    max_existing = await _max_existing_number(
+        db, Registrations.membership_number, MF_RE, "MF-"
+    )
+    return await ensure_counter(db, COUNTER_MEMBERSHIP, max_existing)
 
 
-async def ensure_application_counter(db: AsyncSession) -> None:
-    # Prefer max(request_number); fall back to max(id) for legacy rows without request_number
-    max_req = await _max_existing_number(db, Registrations.request_number, REQ_RE)
+async def ensure_application_counter(db: AsyncSession) -> SystemCounter:
+    """Return application counter; seed from MAX(REQ-*) / max(id) only when missing."""
+    result = await db.execute(
+        select(SystemCounter).where(SystemCounter.name == COUNTER_APPLICATION)
+    )
+    counter = result.scalar_one_or_none()
+    if counter is not None:
+        return counter
+    max_req = await _max_existing_number(db, Registrations.request_number, REQ_RE, "REQ-")
     if max_req <= 0:
-        result = await db.execute(select(Registrations.id))
-        ids = [r[0] for r in result.all() if r[0]]
-        max_req = max(ids) if ids else 0
-    await ensure_counter(db, COUNTER_APPLICATION, max_req)
+        result = await db.execute(select(func.coalesce(func.max(Registrations.id), 0)))
+        max_req = int(result.scalar() or 0)
+    return await ensure_counter(db, COUNTER_APPLICATION, max_req)
 
 
 async def get_next_counter_value(
     db: AsyncSession,
     name: str,
     in_use_fn,
+    counter: Optional[SystemCounter] = None,
 ) -> int:
-    result = await db.execute(select(SystemCounter).where(SystemCounter.name == name))
-    counter = result.scalar_one_or_none()
+    if counter is None:
+        result = await db.execute(select(SystemCounter).where(SystemCounter.name == name))
+        counter = result.scalar_one_or_none()
     current = int(counter.value) if counter else 0
     n = current + 1
     for _ in range(100000):
@@ -114,9 +152,7 @@ async def set_next_counter_value(
     in_use_fn,
     ensure_fn,
 ) -> int:
-    await ensure_fn(db)
-    result = await db.execute(select(SystemCounter).where(SystemCounter.name == name))
-    counter = result.scalar_one_or_none()
+    counter = await ensure_fn(db)
     new_value = int(next_n) - 1
     if counter is None:
         db.add(SystemCounter(name=name, value=new_value))
@@ -154,8 +190,10 @@ async def allocate_counter_value(
 
 # ---- Membership API ----
 async def get_next_membership_number(db: AsyncSession) -> int:
-    await ensure_membership_counter(db)
-    return await get_next_counter_value(db, COUNTER_MEMBERSHIP, membership_number_in_use)
+    counter = await ensure_membership_counter(db)
+    return await get_next_counter_value(
+        db, COUNTER_MEMBERSHIP, membership_number_in_use, counter=counter
+    )
 
 
 async def set_next_membership_number(db: AsyncSession, next_n: int) -> int:
@@ -180,8 +218,10 @@ async def allocate_membership_number(db: AsyncSession) -> str:
 
 # ---- Application / request API ----
 async def get_next_application_number(db: AsyncSession) -> int:
-    await ensure_application_counter(db)
-    return await get_next_counter_value(db, COUNTER_APPLICATION, application_number_in_use)
+    counter = await ensure_application_counter(db)
+    return await get_next_counter_value(
+        db, COUNTER_APPLICATION, application_number_in_use, counter=counter
+    )
 
 
 async def set_next_application_number(db: AsyncSession, next_n: int) -> int:

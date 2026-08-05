@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import Integer, case, cast, extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from core.database import get_db
 from dependencies.auth import get_current_user
@@ -18,6 +19,33 @@ from routers.audit_log import log_action
 from schemas.auth import UserResponse
 from services.membership_numbers import allocate_membership_number, ensure_membership_counter
 from services.panel_auth import ensure_schema
+
+# Columns required by serialize_registration / RegistrationResponse (avoid SELECT *)
+_REGISTRATION_LIST_COLUMNS = (
+    Registrations.id,
+    Registrations.business_name,
+    Registrations.merchant_name,
+    Registrations.phone,
+    Registrations.governorate,
+    Registrations.area,
+    Registrations.business_type,
+    Registrations.image_key,
+    Registrations.notes,
+    Registrations.extra_fields,
+    Registrations.status,
+    Registrations.membership_number,
+    Registrations.request_number,
+    Registrations.membership_status,
+    Registrations.approved_at,
+    Registrations.whatsapp_registration_sent,
+    Registrations.whatsapp_approval_sent,
+    Registrations.whatsapp_last_attempt,
+    Registrations.whatsapp_status,
+    Registrations.user_id,
+    Registrations.last_modified_by,
+    Registrations.created_at,
+    Registrations.updated_at,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -246,33 +274,37 @@ async def get_stats(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        total = (await db.execute(select(func.count(Registrations.id)))).scalar() or 0
-        pending = (
-            await db.execute(select(func.count(Registrations.id)).where(Registrations.status == "pending"))
-        ).scalar() or 0
-        approved = (
-            await db.execute(select(func.count(Registrations.id)).where(Registrations.status == "approved"))
-        ).scalar() or 0
-        rejected = (
-            await db.execute(select(func.count(Registrations.id)).where(Registrations.status == "rejected"))
-        ).scalar() or 0
-        active_members = (
+        # Single-pass conditional aggregates (one table scan / index use) instead of 6 COUNTs
+        row = (
             await db.execute(
-                select(func.count(Registrations.id)).where(Registrations.membership_status == "active")
+                select(
+                    func.count(Registrations.id),
+                    func.coalesce(
+                        func.sum(case((Registrations.status == "pending", 1), else_=0)), 0
+                    ),
+                    func.coalesce(
+                        func.sum(case((Registrations.status == "approved", 1), else_=0)), 0
+                    ),
+                    func.coalesce(
+                        func.sum(case((Registrations.status == "rejected", 1), else_=0)), 0
+                    ),
+                    func.coalesce(
+                        func.sum(case((Registrations.membership_status == "active", 1), else_=0)), 0
+                    ),
+                    func.coalesce(
+                        func.sum(case((Registrations.membership_status == "suspended", 1), else_=0)),
+                        0,
+                    ),
+                )
             )
-        ).scalar() or 0
-        suspended_members = (
-            await db.execute(
-                select(func.count(Registrations.id)).where(Registrations.membership_status == "suspended")
-            )
-        ).scalar() or 0
+        ).one()
         return StatsResponse(
-            total=total,
-            pending=pending,
-            approved=approved,
-            rejected=rejected,
-            active_members=active_members,
-            suspended_members=suspended_members,
+            total=int(row[0] or 0),
+            pending=int(row[1] or 0),
+            approved=int(row[2] or 0),
+            rejected=int(row[3] or 0),
+            active_members=int(row[4] or 0),
+            suspended_members=int(row[5] or 0),
         )
     except Exception as e:
         logger.error(f"Error fetching stats: {str(e)}", exc_info=True)
@@ -306,7 +338,7 @@ async def get_all_registrations(
         if not effective_sort:
             effective_sort = "-created_at"
 
-        stmt = select(Registrations)
+        stmt = select(Registrations).options(load_only(*_REGISTRATION_LIST_COLUMNS))
         count_stmt = select(func.count(Registrations.id))
         stmt, count_stmt = apply_filters(
             stmt, count_stmt, query, status, membership_status, governorate, year, month, day
@@ -567,7 +599,7 @@ async def get_next_membership_number_api(
     from services.membership_numbers import get_next_membership_number, format_membership
 
     await ensure_schema()
-    await ensure_membership_counter(db)
+    # get_next_membership_number → ensure_membership_counter (cheap when counter exists)
     n = await get_next_membership_number(db)
     return {
         "next_number": n,
@@ -631,11 +663,10 @@ async def get_next_application_number_api(
     from services.membership_numbers import (
         get_next_application_number,
         format_application,
-        ensure_application_counter,
     )
 
     await ensure_schema()
-    await ensure_application_counter(db)
+    # get_next_application_number → ensure_application_counter (cheap when counter exists)
     n = await get_next_application_number(db)
     return {
         "next_number": n,

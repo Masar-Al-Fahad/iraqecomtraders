@@ -274,31 +274,35 @@ export default function AdminDashboard() {
     </TableHead>
   );
 
-  // Auth check - local JWT
+  // Auth check - local JWT (me + check-admin in parallel)
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await client.auth.me();
-        if (!res?.data) {
-          setAuthState('unauthorized');
-          return;
-        }
-        try {
-          const check = await client.apiCall.invoke({
+        const [meSettled, checkSettled] = await Promise.allSettled([
+          client.auth.me(),
+          client.apiCall.invoke({
             url: '/api/v1/admin/registrations/check-admin',
             method: 'GET',
             data: {},
-          });
-          const perms = { ...defaultPermissions(), ...(check.data?.permissions || res.data?.permissions || {}) };
-          if (check.data?.is_super_admin || res.data?.is_super_admin) {
-            Object.keys(perms).forEach((k) => { (perms as any)[k] = true; });
-          }
-          setPermissions(perms);
-          setCurrentUserName(res.data?.name || check.data?.name || '');
-          setAuthState('authorized');
-        } catch {
+          }),
+        ]);
+        if (meSettled.status !== 'fulfilled' || !meSettled.value?.data) {
           setAuthState('unauthorized');
+          return;
         }
+        if (checkSettled.status !== 'fulfilled') {
+          setAuthState('unauthorized');
+          return;
+        }
+        const res = meSettled.value;
+        const check = checkSettled.value;
+        const perms = { ...defaultPermissions(), ...(check.data?.permissions || res.data?.permissions || {}) };
+        if (check.data?.is_super_admin || res.data?.is_super_admin) {
+          Object.keys(perms).forEach((k) => { (perms as any)[k] = true; });
+        }
+        setPermissions(perms);
+        setCurrentUserName(res.data?.name || check.data?.name || '');
+        setAuthState('authorized');
       } catch {
         setAuthState('unauthorized');
       }
@@ -352,26 +356,30 @@ export default function AdminDashboard() {
   }, [currentPage, pageSize, searchTerm, statusFilter, membershipStatusFilter, governorateFilter, yearFilter, monthFilter, dayFilter, sortParam, sortBy, sortOrder, toast]);
 
   useEffect(() => {
-    if (authState === 'authorized') {
-      fetchRegistrations();
-      fetchStats();
+    if (authState !== 'authorized') return;
+    const loadDashboard = async () => {
+      const tasks: Promise<unknown>[] = [fetchRegistrations(), fetchStats()];
       if (permissions.edit) {
-        client.apiCall
-          .invoke({ url: '/api/v1/admin/registrations/next-membership-number', method: 'GET', data: {} })
-          .then((res) => {
-            setNextMembership(String(res.data?.next_number ?? ''));
-            setNextMembershipPreview(res.data?.preview || '');
-          })
-          .catch(() => {});
-        client.apiCall
-          .invoke({ url: '/api/v1/admin/registrations/next-application-number', method: 'GET', data: {} })
-          .then((res) => {
-            setNextApplication(String(res.data?.next_number ?? ''));
-            setNextApplicationPreview(res.data?.preview || '');
-          })
-          .catch(() => {});
+        tasks.push(
+          client.apiCall
+            .invoke({ url: '/api/v1/admin/registrations/next-membership-number', method: 'GET', data: {} })
+            .then((res) => {
+              setNextMembership(String(res.data?.next_number ?? ''));
+              setNextMembershipPreview(res.data?.preview || '');
+            })
+            .catch(() => {}),
+          client.apiCall
+            .invoke({ url: '/api/v1/admin/registrations/next-application-number', method: 'GET', data: {} })
+            .then((res) => {
+              setNextApplication(String(res.data?.next_number ?? ''));
+              setNextApplicationPreview(res.data?.preview || '');
+            })
+            .catch(() => {}),
+        );
       }
-    }
+      await Promise.all(tasks);
+    };
+    loadDashboard();
   }, [authState, fetchRegistrations, fetchStats, permissions.edit]);
 
   const saveCounter = async (

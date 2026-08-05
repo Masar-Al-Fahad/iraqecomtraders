@@ -185,6 +185,21 @@ async def ensure_schema():
                 except Exception as idx_err:
                     logger.warning("Could not ensure unique membership_number index: %s", idx_err)
 
+                # Dashboard filter/sort/stats indexes (IF NOT EXISTS — safe on every boot)
+                for idx_sql in (
+                    "CREATE INDEX IF NOT EXISTS ix_registrations_status ON registrations (status)",
+                    "CREATE INDEX IF NOT EXISTS ix_registrations_membership_status "
+                    "ON registrations (membership_status)",
+                    "CREATE INDEX IF NOT EXISTS ix_registrations_governorate ON registrations (governorate)",
+                    "CREATE INDEX IF NOT EXISTS ix_registrations_created_at ON registrations (created_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_registrations_status_created_at "
+                    "ON registrations (status, created_at)",
+                ):
+                    try:
+                        sync_conn.execute(text(idx_sql))
+                    except Exception as idx_err:
+                        logger.warning("Could not ensure index (%s): %s", idx_sql, idx_err)
+
                 # is_super_admin on panel_users
                 if dialect == "sqlite":
                     rows = sync_conn.execute(text("PRAGMA table_info(panel_users)")).fetchall()
