@@ -114,8 +114,13 @@ export default function Index() {
     const file = e.target.files?.[0];
     if (!file) return;
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type) && !file.type.startsWith('image/')) {
+    const type = (file.type || '').toLowerCase();
+    if (!allowedTypes.includes(type)) {
       toast({ title: 'خطأ', description: 'صيغة الملف غير مدعومة', variant: 'destructive' });
+      return;
+    }
+    if (file.size < 1) {
+      toast({ title: 'خطأ', description: 'الملف فارغ', variant: 'destructive' });
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
@@ -209,39 +214,103 @@ export default function Index() {
       }
 
       let finalKey = 'manual_entry';
+      let uploadedObjectKey: string | null = null;
+      const requestId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID().replace(/-/g, '')
+          : `r${Date.now().toString(36)}`;
+      const tSubmit0 = performance.now();
+
       if (imageFile) {
-        const timestamp = Date.now();
-        const safeName = imageFile.name.replace(/[^A-Za-z0-9._-]/g, '_');
-        const objectKey = `registrations/${timestamp}_${safeName}`;
-        // Skip upload-url RTT — upload endpoint path is stable/public.
-        const uploadUrl = `${API_BASE}/api/v1/public/upload-file?object_key=${encodeURIComponent(objectKey)}`;
-        const putRes = await fetch(uploadUrl, {
+        const tPresign0 = performance.now();
+        const presignRes = await fetch(`${API_BASE}/api/v1/public/presign-upload`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-Id': requestId,
+          },
+          body: JSON.stringify({
+            filename: imageFile.name,
+            content_type: imageFile.type || 'application/octet-stream',
+            size_bytes: imageFile.size,
+          }),
+        });
+        if (!presignRes.ok) {
+          const errData = await presignRes.json().catch(() => ({}));
+          throw new Error(errData.detail || 'فشل في تجهيز رفع الصورة');
+        }
+        const presign = await presignRes.json();
+        const tPresignMs = performance.now() - tPresign0;
+        if (!presign?.upload_url || !presign?.object_key) {
+          throw new Error('فشل في تجهيز رفع الصورة');
+        }
+
+        const tUpload0 = performance.now();
+        const putRes = await fetch(presign.upload_url, {
           method: 'PUT',
           body: imageFile,
-          headers: { 'Content-Type': imageFile.type || 'application/octet-stream' },
+          headers: {
+            'Content-Type':
+              presign.content_type || imageFile.type || 'application/octet-stream',
+          },
         });
-        if (!putRes.ok) throw new Error('فشل في رفع الصورة إلى الخادم');
-        const putData = await putRes.json().catch(() => ({}));
-        finalKey = putData.object_key || objectKey;
+        const tUploadMs = performance.now() - tUpload0;
+        if (!putRes.ok) {
+          throw new Error(
+            'فشل في رفع الصورة. إن استمر الخطأ، فعّل CORS لمخزن Supabase Storage من لوحة التحكم.'
+          );
+        }
+        finalKey = presign.object_key;
+        uploadedObjectKey = finalKey;
+        // Timing only — no PII / file contents
+        console.info(
+          `REG_TIMING rid=${requestId} stage=presign_ms=${tPresignMs.toFixed(1)} direct_upload_ms=${tUploadMs.toFixed(1)}`
+        );
       }
       payload.image_key = finalKey;
 
-      const registerRes = await fetch(`${API_BASE}/api/v1/public/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': idempotencyKey,
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!registerRes.ok) {
-        const errData = await registerRes.json().catch(() => ({}));
-        throw new Error(errData.detail || errMsg);
+      try {
+        const tReg0 = performance.now();
+        const registerRes = await fetch(`${API_BASE}/api/v1/public/register`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Idempotency-Key': idempotencyKey,
+            'X-Request-Id': requestId,
+          },
+          body: JSON.stringify(payload),
+        });
+        const tRegMs = performance.now() - tReg0;
+        if (!registerRes.ok) {
+          const errData = await registerRes.json().catch(() => ({}));
+          throw new Error(errData.detail || errMsg);
+        }
+        const responseData = await registerRes.json();
+        uploadedObjectKey = null;
+        const tTotalMs = performance.now() - tSubmit0;
+        console.info(
+          `REG_TIMING rid=${requestId} stage=register_ms=${tRegMs.toFixed(1)} total_submit_ms=${tTotalMs.toFixed(1)}`
+        );
+        setRequestNumber(responseData.request_number || '');
+        setSubmitted(true);
+        toast({ title: 'نجاح', description: texts.success_message || 'تم استلام طلبك بنجاح' });
+      } catch (regErr) {
+        if (uploadedObjectKey) {
+          try {
+            await fetch(`${API_BASE}/api/v1/public/cleanup-upload`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Request-Id': requestId,
+              },
+              body: JSON.stringify({ object_key: uploadedObjectKey }),
+            });
+          } catch {
+            /* best-effort cleanup */
+          }
+        }
+        throw regErr;
       }
-      const responseData = await registerRes.json();
-      setRequestNumber(responseData.request_number || '');
-      setSubmitted(true);
-      toast({ title: 'نجاح', description: texts.success_message || 'تم استلام طلبك بنجاح' });
     } catch (error: any) {
       toast({
         title: 'خطأ',

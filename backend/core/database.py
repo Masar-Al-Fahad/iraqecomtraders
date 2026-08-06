@@ -613,7 +613,20 @@ async def get_db() -> AsyncSession:
         raise RuntimeError("Database not initialized")
 
     try:
+        # Opt-in timing (X-Reg-Perf): session factory / pool checkout cost.
+        # Only records when reg_perf was enabled by an earlier dependency.
+        t_acquire = time.perf_counter()
         async with db_manager.async_session_maker() as session:
+            try:
+                from services import reg_perf
+
+                if reg_perf.is_enabled():
+                    reg_perf.record(
+                        "db_session_create",
+                        (time.perf_counter() - t_acquire) * 1000.0,
+                    )
+            except Exception:
+                pass
             logger.debug(f"[DB_OP] Database session created successfully in {time.time() - start_time:.4f}s")
             try:
                 yield session

@@ -39,3 +39,11 @@ Thumbs.db
 # Misc local
 .mgx/
 backend/_supabase_winning_host.txt
+
+# Local probe / perf reports (do not ship)
+backend/_reg_*_report.json
+backend/_reg_submit_*.json
+backend/_perf_measure_report.*
+backend/_test_reg_direct_upload_report.json
+backend/_test_final_run.txt
+backend/_test_out/

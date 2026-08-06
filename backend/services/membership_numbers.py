@@ -168,11 +168,14 @@ async def allocate_counter_value(
     in_use_fn,
     ensure_fn,
     format_fn,
+    *,
+    skip_in_use_check: bool = False,
 ) -> str:
     """Atomically increment system_counters (no full-table scan of registrations).
 
-    Happy path: UPDATE … RETURNING + indexed point existence check.
-    Replaces select-row → mutate → flush → exists (extra round trips).
+    Happy path: UPDATE … RETURNING (+ optional indexed point existence check).
+    When skip_in_use_check=True, rely on a unique constraint + IntegrityError retry
+    at the caller (saves one RTT per allocation).
     """
     from sqlalchemy import text
 
@@ -193,6 +196,11 @@ async def allocate_counter_value(
                     await ensure_fn(db)
                 continue
             n = int(row[0])
+        if skip_in_use_check:
+            reg_perf.record("counter_in_use_check", 0.0)
+            code = format_fn(n)
+            logger.info("Allocated %s counter=%s -> %s", name, n, code)
+            return code
         with reg_perf.stage("counter_in_use_check"):
             taken = await in_use_fn(db, n)
         if not taken:
@@ -248,11 +256,99 @@ async def set_next_application_number(db: AsyncSession, next_n: int) -> int:
     )
 
 
-async def allocate_application_number(db: AsyncSession) -> str:
+async def allocate_application_number(db: AsyncSession, *, skip_in_use_check: bool = True) -> str:
+    """Allocate next REQ-XXXX. Default skips the extra in-use SELECT (unique index covers collisions)."""
     return await allocate_counter_value(
         db,
         COUNTER_APPLICATION,
         application_number_in_use,
         ensure_application_counter,
         format_application,
+        skip_in_use_check=skip_in_use_check,
     )
+
+
+async def lock_phone_check_and_allocate(
+    db: AsyncSession,
+    phone: str,
+) -> dict:
+    """Single Postgres round-trip: advisory lock + phone lookup + counter allocate.
+
+    Returns dict with keys:
+      existing_id, existing_request_number, existing_extra_fields, request_number
+    request_number is set only when no existing pending/approved row for phone.
+    Falls back to None (caller uses multi-query path) when not PostgreSQL.
+    """
+    from sqlalchemy import text
+
+    from services import reg_perf
+
+    try:
+        bind = await db.connection()
+        if bind.dialect.name != "postgresql":
+            return {}
+    except Exception:
+        return {}
+
+    with reg_perf.stage("lock_phone_allocate"):
+        result = await db.execute(
+            text(
+                """
+                WITH lock AS (
+                    SELECT pg_advisory_xact_lock(hashtext(:phone)) AS locked
+                ),
+                existing AS (
+                    SELECT r.id, r.request_number, r.extra_fields
+                    FROM registrations r, lock
+                    WHERE r.phone = :phone AND r.status <> 'rejected'
+                    LIMIT 1
+                ),
+                incr AS (
+                    UPDATE system_counters sc
+                    SET value = value + 1
+                    FROM lock
+                    WHERE sc.name = :counter_name
+                      AND NOT EXISTS (SELECT 1 FROM existing)
+                    RETURNING sc.value AS new_value
+                )
+                SELECT
+                    (SELECT id FROM existing) AS existing_id,
+                    (SELECT request_number FROM existing) AS existing_request_number,
+                    (SELECT extra_fields FROM existing) AS existing_extra_fields,
+                    (SELECT new_value FROM incr) AS new_value
+                """
+            ),
+            {"phone": phone, "counter_name": COUNTER_APPLICATION},
+        )
+        row = result.first()
+
+    if row is None:
+        return {}
+
+    existing_id = row.existing_id
+    new_value = row.new_value
+    out: dict = {
+        "existing_id": existing_id,
+        "existing_request_number": row.existing_request_number,
+        "existing_extra_fields": row.existing_extra_fields or "",
+        "request_number": None,
+    }
+    if existing_id is None:
+        if new_value is None:
+            # Counter row missing — ensure then allocate in follow-up.
+            with reg_perf.stage("counter_ensure"):
+                await ensure_application_counter(db)
+            out["request_number"] = await allocate_application_number(db, skip_in_use_check=True)
+        else:
+            out["request_number"] = format_application(int(new_value))
+            reg_perf.record("counter_select_increment", 0.0)
+            reg_perf.record("counter_in_use_check", 0.0)
+            reg_perf.record("advisory_lock", 0.0)
+            reg_perf.record("phone_uniqueness_check", 0.0)
+            logger.info("Allocated application (combined) -> %s", out["request_number"])
+    else:
+        reg_perf.record("counter_select_increment", 0.0)
+        reg_perf.record("counter_in_use_check", 0.0)
+        reg_perf.record("advisory_lock", 0.0)
+        reg_perf.record("phone_uniqueness_check", 0.0)
+    return out
