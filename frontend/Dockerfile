@@ -29,12 +29,14 @@ RUN set -e; \
 FROM node:20-alpine
 
 WORKDIR /app
-RUN npm install -g serve@14
+RUN npm install -g serve@14.2.5
 
 COPY --from=build /app/dist ./dist
+# Explicit SPA rewrites (also enabled via -s). Lives next to dist so `serve -c` finds it.
+COPY serve.json ./serve.json
 
 ENV PORT=3000
 EXPOSE 3000
 
-# -s = SPA mode (all routes → index.html)
-CMD ["sh", "-c", "serve -s dist -l tcp://0.0.0.0:${PORT}"]
+# -s / serve.json rewrites: every non-file path → /index.html (assets under /assets/* still served as files)
+CMD ["sh", "-c", "serve -s dist -c serve.json -l tcp://0.0.0.0:${PORT}"]

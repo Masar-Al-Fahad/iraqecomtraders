@@ -51,6 +51,9 @@ const AppRoutes = () => (
 
     {/* MODULE_ROUTES_START */}
     {/* MODULE_ROUTES_END */}
+
+    {/* Unknown paths → registration (Atoms 404 placeholder is disabled in vite.config) */}
+    <Route path="*" element={<Navigate to={ROUTES.REGISTRATION} replace />} />
   </Routes>
 );
 

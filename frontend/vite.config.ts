@@ -48,7 +48,8 @@ export default defineConfig(({ command }) => {
         prefix: 'mgx', // Prefix used to identify source locations; do not change.
       }),
       react(),
-      atoms(),
+      // Disable Atoms "Not built yet" catch-all so unmatched paths don't mask SPA deep-link issues.
+      atoms({ 404: { enable: false } }),
       ensureBuildOutDir(),
       Sitemap({
         hostname: 'https://atoms.template.com',
