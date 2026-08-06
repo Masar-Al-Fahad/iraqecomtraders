@@ -8,6 +8,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { client, localAuth } from '@/lib/localApi';
 import { useNavigate } from 'react-router-dom';
 import { useBrand } from '@/lib/brand';
+import { ROUTES } from '@/lib/routes';
 
 export default function AdminLogin() {
   const { toast } = useToast();
@@ -19,7 +20,7 @@ export default function AdminLogin() {
 
   useEffect(() => {
     if (localAuth.isLoggedIn()) {
-      navigate('/admin', { replace: true });
+      navigate(ROUTES.ADMIN, { replace: true });
     }
   }, [navigate]);
 
@@ -37,7 +38,7 @@ export default function AdminLogin() {
     try {
       await client.auth.login(username.trim(), password);
       toast({ title: 'تم الدخول', description: 'مرحباً بك في لوحة الإدارة' });
-      navigate('/admin', { replace: true });
+      navigate(ROUTES.ADMIN, { replace: true });
     } catch (error: any) {
       toast({
         title: 'فشل تسجيل الدخول',

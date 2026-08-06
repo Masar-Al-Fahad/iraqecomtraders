@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ROUTES } from '@/lib/routes';
 
 export default function AuthCallback() {
   const navigate = useNavigate();
 
   useEffect(() => {
     // Local mode: OIDC callback is unused — send user to local admin login
-    navigate('/admin/login', { replace: true });
+    navigate(ROUTES.ADMIN_LOGIN, { replace: true });
   }, [navigate]);
 
   return (

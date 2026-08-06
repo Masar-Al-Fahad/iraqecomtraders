@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Toaster } from '@/components/ui/toaster';
 import { client, downloadAuthorizedFile } from '@/lib/localApi';
 import { useBrand } from '@/lib/brand';
+import { ROUTES } from '@/lib/routes';
 import { ArrowRight, FileSpreadsheet, Printer, Search } from 'lucide-react';
 
 type Row = {
@@ -155,7 +156,7 @@ export default function MembershipReport() {
       return;
     }
     const ids = visible.map((r) => r.id).join(',');
-    window.open(`/admin/print?ids=${encodeURIComponent(ids)}&sort=-created_at`, '_blank', 'noopener,noreferrer');
+    window.open(`${ROUTES.ADMIN_PRINT}?ids=${encodeURIComponent(ids)}&sort=-created_at`, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -170,7 +171,7 @@ export default function MembershipReport() {
               <p className="text-xs opacity-80">تقرير الأعضاء حسب الفترة</p>
             </div>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => navigate('/admin')} className="gap-1">
+          <Button variant="secondary" size="sm" onClick={() => navigate(ROUTES.ADMIN)} className="gap-1">
             <ArrowRight className="w-4 h-4" /> رجوع
           </Button>
         </div>

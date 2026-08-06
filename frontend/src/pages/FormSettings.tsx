@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { Toaster } from '@/components/ui/toaster';
 import { client } from '@/lib/localApi';
+import { ROUTES } from '@/lib/routes';
 import { ArrowRight, Eye, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 
 type FormField = {
@@ -80,7 +81,7 @@ export default function FormSettingsPage() {
       try {
         const me = await client.auth.me();
         if (!me?.data) {
-          navigate('/admin/login');
+          navigate(ROUTES.ADMIN_LOGIN);
           return;
         }
         const check = await client.apiCall.invoke({
@@ -91,7 +92,7 @@ export default function FormSettingsPage() {
         const perms = check.data?.permissions || me.data.permissions || {};
         if (!check.data?.is_super_admin && !me.data.is_super_admin && !perms.manage_registration_form_settings) {
           toast({ title: 'غير مسموح', description: 'ليس لديك صلاحية إعدادات الاستمارة', variant: 'destructive' });
-          navigate('/admin');
+          navigate(ROUTES.ADMIN);
           return;
         }
         const res = await client.apiCall.invoke({
@@ -102,7 +103,7 @@ export default function FormSettingsPage() {
         setForm({ ...emptySettings(), ...res.data, fields: res.data?.fields || [] });
         setAuthOk(true);
       } catch {
-        navigate('/admin/login');
+        navigate(ROUTES.ADMIN_LOGIN);
       }
     };
     boot();
@@ -211,7 +212,7 @@ export default function FormSettingsPage() {
             <p className="text-xs opacity-80">تخصيص بوابة الانضمام</p>
           </div>
           <div className="flex gap-2 flex-wrap">
-            <Button variant="secondary" size="sm" onClick={() => navigate('/admin')} className="gap-1">
+            <Button variant="secondary" size="sm" onClick={() => navigate(ROUTES.ADMIN)} className="gap-1">
               <ArrowRight className="w-4 h-4" /> رجوع
             </Button>
             <Button size="sm" variant="outline" className="bg-white/10 text-white border-white/30 gap-1" onClick={() => setPreview((v) => !v)}>

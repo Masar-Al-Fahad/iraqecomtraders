@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Shield, User, LogIn } from 'lucide-react';
+import { ROUTES } from '@/lib/routes';
 
 interface ProtectedAdminRouteProps {
   children: React.ReactNode;
@@ -29,7 +30,7 @@ const ProtectedAdminRoute: React.FC<ProtectedAdminRouteProps> = ({
 
   // If the user is not logged in, redirect to the login page
   if (!user) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={ROUTES.ADMIN_LOGIN} replace state={{ from: location }} />;
   }
 
   // If the user is not an admin, show an insufficient-permissions page

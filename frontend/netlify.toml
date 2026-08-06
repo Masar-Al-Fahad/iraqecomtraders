@@ -2,7 +2,27 @@
   command = "npm run build"
   publish = "dist"
 
-# SPA client-side routes (/admin, /admin/login, …)
+# SPA client-side routes (/iraq-ecom-traders/..., legacy /admin/..., /auth/...)
+[[redirects]]
+  from = "/iraq-ecom-traders/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/auth/*"
+  to = "/index.html"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

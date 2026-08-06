@@ -1,0 +1,6 @@
+# SPA fallback for deep links under /iraq-ecom-traders/* and legacy /admin/*
+/iraq-ecom-traders/*  /index.html  200
+/admin/*              /index.html  200
+/admin                /index.html  200
+/auth/*               /index.html  200
+/*                    /index.html  200

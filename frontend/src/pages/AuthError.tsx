@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { AlertCircle } from 'lucide-react';
+import { ROUTES } from '@/lib/routes';
 
 export default function AuthErrorPage() {
   const [searchParams] = useSearchParams();
@@ -16,8 +17,8 @@ export default function AuthErrorPage() {
       setCountdown(prev => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Redirect to home page
-          window.location.href = '/';
+          // Redirect to registration
+          window.location.href = ROUTES.REGISTRATION;
           return 0;
         }
         return prev - 1;
@@ -29,7 +30,7 @@ export default function AuthErrorPage() {
   }, []);
 
   const handleReturnHome = () => {
-    window.location.href = '/';
+    window.location.href = ROUTES.REGISTRATION;
   };
 
   return (

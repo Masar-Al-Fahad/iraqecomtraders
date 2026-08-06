@@ -1,4 +1,5 @@
 import { getAPIBaseURL } from './config';
+import { ROUTES } from './routes';
 
 const TOKEN_KEY = 'admin_access_token';
 
@@ -83,7 +84,7 @@ export const client = {
       return { data: await res.json() };
     },
     toLogin() {
-      window.location.href = '/admin/login';
+      window.location.href = ROUTES.ADMIN_LOGIN;
     },
     async login(username: string, password: string) {
       const base = apiBase();

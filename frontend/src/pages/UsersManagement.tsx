@@ -12,6 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Toaster } from '@/components/ui/toaster';
 import { client } from '@/lib/localApi';
 import { useNavigate } from 'react-router-dom';
+import { ROUTES } from '@/lib/routes';
 import {
   ArrowRight, Users, UserPlus, Pencil, Trash2, LogOut, Shield, Store,
 } from 'lucide-react';
@@ -140,7 +141,7 @@ export default function UsersManagement() {
       // silent
     }
     setAuthState('unauthorized');
-    navigate('/admin/login');
+    navigate(ROUTES.ADMIN_LOGIN);
   };
 
   const openCreateDialog = () => {
@@ -279,7 +280,7 @@ export default function UsersManagement() {
             <Button onClick={handleLogin} className="w-full bg-primary text-white">
               تسجيل الدخول
             </Button>
-            <Button variant="outline" onClick={() => navigate('/')} className="w-full">
+            <Button variant="outline" onClick={() => navigate(ROUTES.REGISTRATION)} className="w-full">
               العودة للرئيسية
             </Button>
           </CardContent>
@@ -306,7 +307,7 @@ export default function UsersManagement() {
             <Button size="sm" onClick={openCreateDialog} className="flex items-center gap-1 bg-primary text-white">
               <UserPlus className="w-4 h-4" /> مستخدم جديد
             </Button>
-            <Button variant="outline" size="sm" onClick={() => navigate('/admin')} className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN)} className="flex items-center gap-2">
               <ArrowRight className="w-4 h-4" /> لوحة الإدارة
             </Button>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="flex items-center gap-1 text-red-600 hover:bg-red-50" title="تسجيل الخروج">

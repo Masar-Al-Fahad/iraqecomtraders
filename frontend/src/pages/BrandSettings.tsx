@@ -9,6 +9,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { client } from '@/lib/localApi';
 import { getAPIBaseURL } from '@/lib/config';
 import { useBrand, DEFAULT_BRAND, type BrandSettings } from '@/lib/brand';
+import { ROUTES } from '@/lib/routes';
 import { ArrowRight, Save, RotateCcw, Upload } from 'lucide-react';
 
 const IDENTITY_FIELDS: { key: keyof BrandSettings; label: string; type?: string }[] = [
@@ -88,7 +89,7 @@ export default function BrandSettingsPage() {
       try {
         const me = await client.auth.me();
         if (!me?.data) {
-          navigate('/admin/login');
+          navigate(ROUTES.ADMIN_LOGIN);
           return;
         }
         const check = await client.apiCall.invoke({
@@ -99,7 +100,7 @@ export default function BrandSettingsPage() {
         const perms = check.data?.permissions || me.data.permissions || {};
         if (!check.data?.is_super_admin && !me.data.is_super_admin && !perms.manage_brand_settings) {
           toast({ title: 'غير مسموح', description: 'ليس لديك صلاحية إدارة الهوية', variant: 'destructive' });
-          navigate('/admin');
+          navigate(ROUTES.ADMIN);
           return;
         }
         const res = await client.apiCall.invoke({
@@ -110,7 +111,7 @@ export default function BrandSettingsPage() {
         setForm({ ...DEFAULT_BRAND, ...res.data });
         setAuthOk(true);
       } catch {
-        navigate('/admin/login');
+        navigate(ROUTES.ADMIN_LOGIN);
       }
     };
     boot();
@@ -199,7 +200,7 @@ export default function BrandSettingsPage() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" size="sm" onClick={() => navigate('/admin')} className="gap-1">
+            <Button variant="secondary" size="sm" onClick={() => navigate(ROUTES.ADMIN)} className="gap-1">
               <ArrowRight className="w-4 h-4" /> رجوع
             </Button>
             <Button size="sm" onClick={reset} variant="outline" className="bg-white/10 text-white border-white/30 gap-1">

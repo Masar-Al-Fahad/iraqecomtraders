@@ -1,12 +1,13 @@
 import React, { useEffect } from 'react';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ROUTES } from '@/lib/routes';
 
 const LogoutCallbackPage: React.FC = () => {
   useEffect(() => {
     // The OIDC provider has logged out the user and redirected here
     // We can redirect to the home page or show a logout success message
     setTimeout(() => {
-      window.location.href = '/';
+      window.location.href = ROUTES.REGISTRATION;
     }, 2000);
   }, []);
 

@@ -14,6 +14,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { client, downloadAuthorizedFile } from '@/lib/localApi';
 import { useNavigate } from 'react-router-dom';
 import { useBrand } from '@/lib/brand';
+import { ROUTES } from '@/lib/routes';
 import { downloadMemberPdf, downloadMembersZip, buildWelcomeMessage } from '@/lib/memberPdf';
 import {
   Search, CheckCircle, XCircle, Eye,
@@ -539,7 +540,7 @@ export default function AdminDashboard() {
     setExportDialogOpen(false);
     setPrintDialogOpen(false);
     if (exportMode === 'print') {
-      window.open(`/admin/print?${q.toString()}`, '_blank', 'noopener,noreferrer');
+      window.open(`${ROUTES.ADMIN_PRINT}?${q.toString()}`, '_blank', 'noopener,noreferrer');
       return;
     }
     toast({ title: 'جاري التصدير...', description: 'يتم إعداد ملف Excel' });
@@ -707,7 +708,7 @@ export default function AdminDashboard() {
       // silent
     }
     setAuthState('unauthorized');
-    navigate('/admin/login');
+    navigate(ROUTES.ADMIN_LOGIN);
   };
 
   const updateStatus = async (id: number, status: string) => {
@@ -953,7 +954,7 @@ export default function AdminDashboard() {
             <Button onClick={handleLogin} className="w-full bg-primary text-white">
               تسجيل الدخول
             </Button>
-            <Button variant="outline" onClick={() => navigate('/')} className="w-full">
+            <Button variant="outline" onClick={() => navigate(ROUTES.REGISTRATION)} className="w-full">
               العودة للرئيسية
             </Button>
           </CardContent>
@@ -990,26 +991,26 @@ export default function AdminDashboard() {
               </Button>
             )}
             {(permissions.manage_brand_settings) && (
-              <Button variant="outline" size="sm" onClick={() => navigate('/admin/brand-settings')} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
+              <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_BRAND_SETTINGS)} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
                 <Palette className="w-4 h-4" /> إعدادات الهوية
               </Button>
             )}
             {(permissions.manage_registration_form_settings) && (
-              <Button variant="outline" size="sm" onClick={() => navigate('/admin/form-settings')} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
+              <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_FORM_SETTINGS)} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
                 <ClipboardList className="w-4 h-4" /> إعدادات الاستمارة
               </Button>
             )}
             {permissions.export && (
-              <Button variant="outline" size="sm" onClick={() => navigate('/admin/membership-report')} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
+              <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_MEMBERSHIP_REPORT)} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
                 <FileText className="w-4 h-4" /> كشف العضوية
               </Button>
             )}
             {permissions.manage_users && (
-              <Button variant="outline" size="sm" onClick={() => navigate('/admin/users')} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
+              <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_USERS)} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
                 <Users className="w-4 h-4" /> إدارة المستخدمين
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={() => navigate('/')} className="flex items-center gap-2 bg-white/10 text-white border-white/30 hover:bg-white/20">
+            <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.REGISTRATION)} className="flex items-center gap-2 bg-white/10 text-white border-white/30 hover:bg-white/20">
               <ArrowRight className="w-4 h-4" /> الرئيسية
             </Button>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="flex items-center gap-1 text-white/90 hover:bg-white/10" title="تسجيل الخروج">
