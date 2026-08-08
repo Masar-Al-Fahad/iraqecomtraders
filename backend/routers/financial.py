@@ -69,6 +69,8 @@ class ServiceTypeIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9_]+$")
     is_active: bool = True
+    default_commission_method: Optional[str] = None
+    default_commission_value: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class CompanyIn(BaseModel):
@@ -258,7 +260,14 @@ async def list_service_types(
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.execute(select(ServiceType).order_by(ServiceType.name))).scalars().all()
-    return {"items": [{"id": x.id, "name": x.name, "code": x.code, "is_active": x.is_active} for x in rows]}
+    return {"items": [{
+        "id": x.id, "name": x.name, "code": x.code, "is_active": x.is_active,
+        "default_commission_method": x.default_commission_method,
+        "default_commission_value": (
+            float(x.default_commission_value)
+            if x.default_commission_value is not None else None
+        ),
+    } for x in rows]}
 
 
 @router.post("/service-types")
@@ -267,6 +276,8 @@ async def create_service_type(
     user: UserResponse = Depends(require_permission("manage_companies_contracts")),
     db: AsyncSession = Depends(get_db),
 ):
+    if data.default_commission_method and data.default_commission_method not in COMMISSION_METHODS:
+        raise HTTPException(400, "طريقة العمولة الافتراضية غير مدعومة")
     actor = await resolve_actor_name(db, user)
     item = ServiceType(**data.model_dump())
     db.add(item)
@@ -327,9 +338,27 @@ async def create_company(
     db: AsyncSession = Depends(get_db),
 ):
     actor = await resolve_actor_name(db, user)
+    service_type = await db.get(ServiceType, data.service_type_id)
+    if not service_type:
+        raise HTTPException(404, "نوع الخدمة غير موجود")
     item = FinancialCompany(**data.model_dump())
     db.add(item)
     await db.flush()
+    if (
+        service_type.default_commission_method
+        and service_type.default_commission_value is not None
+    ):
+        db.add(
+            CompanyContract(
+                company_id=item.id,
+                version=1,
+                commission_method=service_type.default_commission_method,
+                commission_value=service_type.default_commission_value,
+                effective_from=data.contract_start or date.today(),
+                notes="عقد ابتدائي من إعدادات نوع الخدمة؛ يمكن استبداله بنسخة جديدة",
+                created_by=actor,
+            )
+        )
     add_audit(db, action="create", entity_type="company", entity_id=item.id, actor=actor, new_values=data.model_dump())
     await db.commit()
     return {"id": item.id}

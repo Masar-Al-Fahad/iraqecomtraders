@@ -28,6 +28,8 @@ class ServiceType(Base):
     name = Column(String(120), unique=True, nullable=False)
     code = Column(String(64), unique=True, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    default_commission_method = Column(String(40))
+    default_commission_value = Column(Numeric(18, 3))
     created_at = Column(DateTime(timezone=True), default=datetime.now)
 
 
