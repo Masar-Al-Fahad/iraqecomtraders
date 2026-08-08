@@ -11,7 +11,11 @@ RUN npm ci
 
 COPY . .
 
-# Railway/build host env is used as-is.
+# Railway exposes service variables to Docker builds through matching ARG declarations.
+# Do not copy an empty ARG into ENV; resolve the preferred value only in this RUN layer.
+ARG VITE_API_BASE_URL
+ARG VITE_API_URL
+
 # Alias: VITE_API_URL → VITE_API_BASE_URL (Vite only embeds VITE_* at build).
 # Default to the production FastAPI URL when unset so deploys still work.
 RUN set -e; \

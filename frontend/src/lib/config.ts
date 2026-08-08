@@ -35,11 +35,6 @@ const defaultConfig = {
   ADMIN_URL: (import.meta.env.VITE_ADMIN_URL as string | undefined)?.trim() || '',
 };
 
-/** Kept for startup sequencing in main.tsx — no network call. */
-export async function loadRuntimeConfig(): Promise<void> {
-  // API base comes from VITE_API_BASE_URL / VITE_API_URL (or production fallback).
-}
-
 export function getConfig() {
   return {
     API_BASE_URL: envApiBase(),

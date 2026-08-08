@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type ResolvedConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import fs from 'node:fs';
 import path from 'path';
@@ -29,7 +29,7 @@ function ensureBuildOutDir() {
 
   return {
     name: 'ensure-build-out-dir',
-    configResolved(config) {
+    configResolved(config: ResolvedConfig) {
       outDir = path.resolve(config.root, config.build.outDir);
     },
     writeBundle() {
@@ -41,6 +41,9 @@ function ensureBuildOutDir() {
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => {
   const blogPrerenderRoutes = command === 'build' ? getBlogRoutes() : [];
+  const apiProxyTarget =
+    process.env.VITE_API_PROXY_TARGET?.trim() ||
+    `http://127.0.0.1:${process.env.BACKEND_PORT || '8000'}`;
 
   return {
     plugins: [
@@ -76,7 +79,8 @@ export default defineConfig(({ command }) => {
       port: parseInt(process.env.VITE_PORT || '3000'),
       proxy: {
         '/api': {
-          target: `http://localhost:${process.env.BACKEND_PORT || '8000'}`,
+          // Vite's proxy is development-only; production is served from static dist.
+          target: apiProxyTarget,
           changeOrigin: true,
         },
       },

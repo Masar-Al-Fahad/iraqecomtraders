@@ -40,7 +40,7 @@ type JsPdfImageFormat = 'JPEG' | 'PNG';
 
 export function membershipPdfFileName(member: MemberForPdf): string {
   const raw = (member.membership_number || '').trim();
-  let base = raw.replace(/^MF-/i, '').replace(/[^\w\-]/g, '');
+  let base = raw.replace(/^MF-/i, '').replace(/[^\w-]/g, '');
   if (!base) base = String(member.id);
   return `${base}.pdf`;
 }
