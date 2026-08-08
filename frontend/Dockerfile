@@ -38,6 +38,7 @@ WORKDIR /app
 RUN npm install -g serve@14.2.5
 
 COPY --from=build /app/dist ./dist
+COPY package.json ./package.json
 # Explicit SPA rewrites (also enabled via -s). Lives next to dist so `serve -c` finds it.
 COPY serve.json ./serve.json
 
