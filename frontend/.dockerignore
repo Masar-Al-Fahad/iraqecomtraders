@@ -6,5 +6,4 @@ dist
 _vite_*.log
 .git
 *.md
-prerender
 .vite
