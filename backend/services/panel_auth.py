@@ -25,6 +25,23 @@ PERMISSION_KEYS = (
     "manage_users",
     "manage_brand_settings",
     "manage_registration_form_settings",
+    "manage_memberships",
+    "monthly_entry",
+    "view_companies",
+    "manage_companies_contracts",
+    "manage_member_company_accounts",
+    "enter_expenses",
+    "view_expenses",
+    "view_revenue",
+    "view_profits",
+    "view_financial_reports",
+    "view_statements",
+    "export_excel",
+    "print_pdf",
+    "manage_users_permissions",
+    "issue_distinguished_certificate",
+    "view_audit_log",
+    "manage_periods",
 )
 
 
@@ -82,6 +99,18 @@ async def ensure_schema():
         # Ensure SystemCounter model is registered on Base.metadata
         from services.membership_numbers import SystemCounter  # noqa: F401
         from models.app_settings import AppSetting  # noqa: F401
+        from models.financial import (  # noqa: F401
+            AccountingPeriod,
+            CompanyContract,
+            DistinguishedMember,
+            FinancialAuditLog,
+            FinancialCompany,
+            FinancialExpense,
+            MemberCertificate,
+            MemberCompanyAccount,
+            MonthlyActivity,
+            ServiceType,
+        )
 
         async with db_manager.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

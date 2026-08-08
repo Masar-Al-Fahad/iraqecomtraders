@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from dependencies.permissions import require_permission
+from dependencies.permissions import require_any_permission
 from schemas.auth import UserResponse
 from models.panel_users import PanelUser
 from services.panel_auth import (
@@ -18,6 +18,8 @@ from services.panel_auth import (
     normalize_permissions,
     permissions_to_json,
 )
+from services.actor import resolve_actor_name
+from services.financial import add_audit
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,23 @@ class PermissionsModel(BaseModel):
     manage_users: bool = False
     manage_brand_settings: bool = False
     manage_registration_form_settings: bool = False
+    manage_memberships: bool = False
+    monthly_entry: bool = False
+    view_companies: bool = False
+    manage_companies_contracts: bool = False
+    manage_member_company_accounts: bool = False
+    enter_expenses: bool = False
+    view_expenses: bool = False
+    view_revenue: bool = False
+    view_profits: bool = False
+    view_financial_reports: bool = False
+    view_statements: bool = False
+    export_excel: bool = False
+    print_pdf: bool = False
+    manage_users_permissions: bool = False
+    issue_distinguished_certificate: bool = False
+    view_audit_log: bool = False
+    manage_periods: bool = False
 
 
 class PanelUserCreate(BaseModel):
@@ -82,7 +101,7 @@ def serialize_user(user: PanelUser) -> PanelUserResponse:
 
 @router.get("", response_model=PanelUserListResponse)
 async def list_users(
-    current_user: UserResponse = Depends(require_permission("manage_users")),
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_schema()
@@ -102,7 +121,7 @@ async def list_users(
 @router.post("", response_model=PanelUserResponse)
 async def create_user(
     data: PanelUserCreate,
-    current_user: UserResponse = Depends(require_permission("manage_users")),
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_schema()
@@ -126,8 +145,13 @@ async def create_user(
             updated_at=datetime.now(),
         )
         db.add(user)
+        await db.flush()
+        add_audit(
+            db, action="create", entity_type="panel_user", entity_id=user.id,
+            actor=await resolve_actor_name(db, current_user),
+            new_values={"username": username, "permissions": data.permissions.model_dump(), "is_active": data.is_active},
+        )
         await db.commit()
-        await db.refresh(user)
         return serialize_user(user)
     except HTTPException:
         raise
@@ -141,7 +165,7 @@ async def create_user(
 async def update_user(
     user_id: int,
     data: PanelUserUpdate,
-    current_user: UserResponse = Depends(require_permission("manage_users")),
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_schema()
@@ -152,6 +176,11 @@ async def update_user(
         if not user:
             raise HTTPException(status_code=404, detail="المستخدم غير موجود")
 
+        old_values = {
+            "username": user.username,
+            "permissions": normalize_permissions(user.permissions),
+            "is_active": bool(user.is_active),
+        }
         if data.username is not None:
             new_username = data.username.strip()
             if not new_username:
@@ -173,8 +202,15 @@ async def update_user(
             user.is_active = data.is_active
 
         user.updated_at = datetime.now()
+        add_audit(
+            db, action="update", entity_type="panel_user", entity_id=user.id,
+            actor=await resolve_actor_name(db, current_user), old_values=old_values,
+            new_values={
+                "username": user.username, "permissions": normalize_permissions(user.permissions),
+                "is_active": bool(user.is_active), "password_reset": bool(data.password),
+            },
+        )
         await db.commit()
-        await db.refresh(user)
         return serialize_user(user)
     except HTTPException:
         raise
@@ -187,7 +223,7 @@ async def update_user(
 @router.patch("/{user_id}/toggle-active", response_model=PanelUserResponse)
 async def toggle_user_active(
     user_id: int,
-    current_user: UserResponse = Depends(require_permission("manage_users")),
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_schema()
@@ -203,8 +239,12 @@ async def toggle_user_active(
 
         user.is_active = not bool(user.is_active)
         user.updated_at = datetime.now()
+        add_audit(
+            db, action="toggle_active", entity_type="panel_user", entity_id=user.id,
+            actor=await resolve_actor_name(db, current_user),
+            new_values={"is_active": bool(user.is_active)},
+        )
         await db.commit()
-        await db.refresh(user)
         return serialize_user(user)
     except HTTPException:
         raise
@@ -217,7 +257,7 @@ async def toggle_user_active(
 @router.delete("/{user_id}")
 async def delete_user(
     user_id: int,
-    current_user: UserResponse = Depends(require_permission("manage_users")),
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_schema()
@@ -231,6 +271,11 @@ async def delete_user(
         if getattr(user, "is_super_admin", False):
             raise HTTPException(status_code=400, detail="لا يمكن حذف حساب Super Admin")
 
+        add_audit(
+            db, action="delete", entity_type="panel_user", entity_id=user.id,
+            actor=await resolve_actor_name(db, current_user),
+            old_values={"username": user.username, "permissions": normalize_permissions(user.permissions)},
+        )
         await db.delete(user)
         await db.commit()
         return {"message": "تم حذف المستخدم بنجاح", "id": user_id}

@@ -16,6 +16,7 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_BUCKET = "uploads"
+FINANCIAL_PRIVATE_BUCKET = "financial-private"
 MAX_REGISTRATION_IMAGE_BYTES = 5 * 1024 * 1024
 ALLOWED_REGISTRATION_IMAGE_TYPES = frozenset(
     {"image/jpeg", "image/jpg", "image/png", "image/webp"}
@@ -125,6 +126,69 @@ async def upload_bytes(
             return path
     raise SupabaseStorageError(
         f"فشل رفع الملف إلى Supabase Storage ({resp.status_code}): {resp.text[:300]}"
+    )
+
+
+async def ensure_financial_private_bucket() -> None:
+    """Create the dedicated non-public financial bucket when absent."""
+    client = _shared_client()
+    url = f"{_base_url()}/storage/v1/bucket"
+    headers = {**_headers(), "Content-Type": "application/json"}
+    resp = await client.post(
+        url,
+        headers=headers,
+        json={
+            "id": FINANCIAL_PRIVATE_BUCKET,
+            "name": FINANCIAL_PRIVATE_BUCKET,
+            "public": False,
+            "file_size_limit": 10 * 1024 * 1024,
+            "allowed_mime_types": [
+                "application/pdf", "image/jpeg", "image/png", "image/webp"
+            ],
+        },
+    )
+    if resp.status_code not in (200, 201, 409):
+        # Existing buckets may return 400 with a duplicate message.
+        if "already exists" not in (resp.text or "").lower():
+            raise SupabaseStorageError(
+                f"تعذر تجهيز مخزن المستندات الخاصة ({resp.status_code})"
+            )
+
+
+async def upload_private_financial_bytes(
+    object_path: str, content: bytes, *, content_type: str
+) -> str:
+    await ensure_financial_private_bucket()
+    path = object_path.replace("\\", "/").lstrip("/")
+    url = (
+        f"{_base_url()}/storage/v1/object/"
+        f"{FINANCIAL_PRIVATE_BUCKET}/{path}"
+    )
+    resp = await _shared_client().post(
+        url, content=content, headers=_headers(content_type, upsert=False)
+    )
+    if resp.status_code not in (200, 201):
+        raise SupabaseStorageError(
+            f"فشل حفظ المستند الخاص ({resp.status_code})"
+        )
+    return path
+
+
+async def download_private_financial_bytes(object_path: str) -> Tuple[bytes, str]:
+    path = object_path.replace("\\", "/").lstrip("/")
+    encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
+    url = (
+        f"{_base_url()}/storage/v1/object/"
+        f"{FINANCIAL_PRIVATE_BUCKET}/{encoded}"
+    )
+    resp = await _shared_client().get(url, headers=_headers())
+    if resp.status_code != 200:
+        raise SupabaseStorageError("المستند غير موجود أو غير متاح")
+    return (
+        resp.content,
+        resp.headers.get("content-type")
+        or mimetypes.guess_type(path)[0]
+        or "application/octet-stream",
     )
 
 

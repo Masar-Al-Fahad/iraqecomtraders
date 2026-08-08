@@ -23,7 +23,8 @@ def clear_backend_import_cache():
 
 
 clear_backend_import_cache()
-from core.database import Base
+from core.database import Base, db_manager
+from core.config import settings
 import models
 
 # Automatically import all ORM models under Models
@@ -31,6 +32,14 @@ for _, module_name, _ in pkgutil.iter_modules(models.__path__):
     importlib.import_module(f"{models.__name__}.{module_name}")
 
 config = context.config
+
+# Railway and local deployments provide DATABASE_URL through Settings.  Keep
+# alembic.ini secret-free while making `alembic upgrade head` directly usable.
+if settings.database_url:
+    config.set_main_option(
+        "sqlalchemy.url",
+        db_manager._normalize_async_database_url(settings.database_url),
+    )
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

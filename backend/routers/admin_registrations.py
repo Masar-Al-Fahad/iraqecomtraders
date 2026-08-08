@@ -13,7 +13,7 @@ from sqlalchemy.orm import load_only
 
 from core.database import get_db
 from dependencies.auth import get_current_user
-from dependencies.permissions import load_user_permissions, require_permission
+from dependencies.permissions import load_user_permissions, require_any_permission, require_permission
 from models.registrations import Registrations
 from routers.audit_log import log_action
 from schemas.auth import UserResponse
@@ -253,7 +253,7 @@ def apply_sort(stmt, sort: Optional[str]):
 
 @router.get("/check-admin")
 async def check_admin_access(
-    current_user: UserResponse = Depends(require_permission("view")),
+    current_user: UserResponse = Depends(require_any_permission("view", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     await ensure_schema()
@@ -270,7 +270,7 @@ async def check_admin_access(
 
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(
-    current_user: UserResponse = Depends(require_permission("view")),
+    current_user: UserResponse = Depends(require_any_permission("view", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -325,7 +325,7 @@ async def get_all_registrations(
     sort_order: str = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
-    current_user: UserResponse = Depends(require_permission("view")),
+    current_user: UserResponse = Depends(require_any_permission("view", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -593,7 +593,7 @@ async def print_data(
 
 @router.get("/next-membership-number")
 async def get_next_membership_number_api(
-    current_user: UserResponse = Depends(require_permission("edit")),
+    current_user: UserResponse = Depends(require_any_permission("edit", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     from services.membership_numbers import get_next_membership_number, format_membership
@@ -648,7 +648,7 @@ async def _save_next_membership_number(
 async def save_next_membership_number_api(
     data: NextMembershipNumberRequest,
     request: Request,
-    current_user: UserResponse = Depends(require_permission("edit")),
+    current_user: UserResponse = Depends(require_any_permission("edit", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     """Save next membership number (POST/PUT/PATCH — same handler)."""
@@ -657,7 +657,7 @@ async def save_next_membership_number_api(
 
 @router.get("/next-application-number")
 async def get_next_application_number_api(
-    current_user: UserResponse = Depends(require_permission("edit")),
+    current_user: UserResponse = Depends(require_any_permission("edit", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     from services.membership_numbers import (
@@ -715,7 +715,7 @@ async def _save_next_application_number(
 async def save_next_application_number_api(
     data: NextApplicationNumberRequest,
     request: Request,
-    current_user: UserResponse = Depends(require_permission("edit")),
+    current_user: UserResponse = Depends(require_any_permission("edit", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     return await _save_next_application_number(data, request, current_user, db)
@@ -726,7 +726,7 @@ async def update_registration_status(
     registration_id: int,
     data: StatusUpdateRequest,
     request: Request,
-    current_user: UserResponse = Depends(require_permission("edit")),
+    current_user: UserResponse = Depends(require_any_permission("edit", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     if data.status not in ["approved", "rejected", "pending"]:
@@ -780,7 +780,7 @@ async def update_membership_status(
     registration_id: int,
     data: MembershipStatusUpdateRequest,
     request: Request,
-    current_user: UserResponse = Depends(require_permission("edit")),
+    current_user: UserResponse = Depends(require_any_permission("edit", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     if data.membership_status not in ["active", "suspended", "expired"]:
@@ -825,7 +825,7 @@ async def update_membership_status(
 async def add_member_manually(
     data: ManualMemberRequest,
     request: Request,
-    current_user: UserResponse = Depends(require_permission("add")),
+    current_user: UserResponse = Depends(require_any_permission("add", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -884,7 +884,7 @@ async def add_member_manually(
 async def delete_registration(
     registration_id: int,
     request: Request,
-    current_user: UserResponse = Depends(require_permission("delete")),
+    current_user: UserResponse = Depends(require_any_permission("delete", "manage_memberships")),
     db: AsyncSession = Depends(get_db),
 ):
     try:

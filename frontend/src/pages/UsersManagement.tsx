@@ -26,6 +26,23 @@ interface Permissions {
   manage_users: boolean;
   manage_brand_settings: boolean;
   manage_registration_form_settings: boolean;
+  manage_memberships: boolean;
+  monthly_entry: boolean;
+  view_companies: boolean;
+  manage_companies_contracts: boolean;
+  manage_member_company_accounts: boolean;
+  enter_expenses: boolean;
+  view_expenses: boolean;
+  view_revenue: boolean;
+  view_profits: boolean;
+  view_financial_reports: boolean;
+  view_statements: boolean;
+  export_excel: boolean;
+  print_pdf: boolean;
+  manage_users_permissions: boolean;
+  issue_distinguished_certificate: boolean;
+  view_audit_log: boolean;
+  manage_periods: boolean;
 }
 
 interface PanelUser {
@@ -46,6 +63,23 @@ const emptyPermissions = (): Permissions => ({
   manage_users: false,
   manage_brand_settings: false,
   manage_registration_form_settings: false,
+  manage_memberships: false,
+  monthly_entry: false,
+  view_companies: false,
+  manage_companies_contracts: false,
+  manage_member_company_accounts: false,
+  enter_expenses: false,
+  view_expenses: false,
+  view_revenue: false,
+  view_profits: false,
+  view_financial_reports: false,
+  view_statements: false,
+  export_excel: false,
+  print_pdf: false,
+  manage_users_permissions: false,
+  issue_distinguished_certificate: false,
+  view_audit_log: false,
+  manage_periods: false,
 });
 
 const permissionLabels: { key: keyof Permissions; label: string }[] = [
@@ -57,6 +91,23 @@ const permissionLabels: { key: keyof Permissions; label: string }[] = [
   { key: 'manage_users', label: 'إدارة المستخدمين' },
   { key: 'manage_brand_settings', label: 'إعدادات الهوية' },
   { key: 'manage_registration_form_settings', label: 'إعدادات استمارة التسجيل' },
+  { key: 'manage_memberships', label: 'إدارة العضويات الحالية' },
+  { key: 'monthly_entry', label: 'الإدخال الشهري' },
+  { key: 'view_companies', label: 'مشاهدة الشركات' },
+  { key: 'manage_companies_contracts', label: 'إدارة الشركات والعقود' },
+  { key: 'manage_member_company_accounts', label: 'ارتباطات الأعضاء بالشركات' },
+  { key: 'enter_expenses', label: 'إدخال المصاريف' },
+  { key: 'view_expenses', label: 'مشاهدة المصاريف' },
+  { key: 'view_revenue', label: 'مشاهدة الإيرادات' },
+  { key: 'view_profits', label: 'مشاهدة الأرباح' },
+  { key: 'view_financial_reports', label: 'التقارير المالية' },
+  { key: 'view_statements', label: 'كشف الحساب' },
+  { key: 'export_excel', label: 'تصدير Excel المالي' },
+  { key: 'print_pdf', label: 'الطباعة وPDF' },
+  { key: 'manage_users_permissions', label: 'إدارة المستخدمين والصلاحيات' },
+  { key: 'issue_distinguished_certificate', label: 'شهادة العضو المميز' },
+  { key: 'view_audit_log', label: 'سجل العمليات' },
+  { key: 'manage_periods', label: 'اعتماد وإعادة فتح الأشهر' },
 ];
 
 export default function UsersManagement() {
@@ -89,7 +140,7 @@ export default function UsersManagement() {
           });
           const perms = check.data?.permissions || {};
           const isSuper = check.data?.is_super_admin || res.data?.is_super_admin;
-          if (!isSuper && !perms.manage_users) {
+          if (!isSuper && !perms.manage_users && !perms.manage_users_permissions) {
             setAuthState('unauthorized');
             return;
           }

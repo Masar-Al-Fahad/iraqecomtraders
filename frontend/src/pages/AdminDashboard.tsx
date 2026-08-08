@@ -20,7 +20,7 @@ import {
   Search, CheckCircle, XCircle, Eye,
   ArrowRight, Users, Clock, ThumbsUp, ThumbsDown, FileSpreadsheet,
   Trash2, MessageCircle, Send, UserPlus, Calendar, Phone,
-  LogOut, Download, Upload, Shield, ArrowUpDown, ArrowUp, ArrowDown, Printer, Palette, ClipboardList, Pencil, FileText, Save
+  LogOut, Download, Upload, Shield, ArrowUpDown, ArrowUp, ArrowDown, Printer, Palette, ClipboardList, Pencil, FileText, Save, Landmark
 } from 'lucide-react';
 
 const PAGE_SIZE_KEY = 'admin_page_size';
@@ -69,6 +69,16 @@ interface Permissions {
   manage_users: boolean;
   manage_brand_settings: boolean;
   manage_registration_form_settings: boolean;
+  monthly_entry?: boolean;
+  view_companies?: boolean;
+  manage_companies_contracts?: boolean;
+  manage_member_company_accounts?: boolean;
+  enter_expenses?: boolean;
+  view_expenses?: boolean;
+  view_revenue?: boolean;
+  view_profits?: boolean;
+  view_financial_reports?: boolean;
+  issue_distinguished_certificate?: boolean;
 }
 
 const defaultPermissions = (): Permissions => ({
@@ -300,6 +310,12 @@ export default function AdminDashboard() {
         const perms = { ...defaultPermissions(), ...(check.data?.permissions || res.data?.permissions || {}) };
         if (check.data?.is_super_admin || res.data?.is_super_admin) {
           Object.keys(perms).forEach((k) => { (perms as any)[k] = true; });
+        }
+        if ((perms as any).manage_memberships) {
+          perms.view = true;
+          perms.add = true;
+          perms.edit = true;
+          perms.delete = true;
         }
         setPermissions(perms);
         setCurrentUserName(res.data?.name || check.data?.name || '');
@@ -1005,9 +1021,17 @@ export default function AdminDashboard() {
                 <FileText className="w-4 h-4" /> كشف العضوية
               </Button>
             )}
-            {permissions.manage_users && (
+            {(permissions.manage_users || (permissions as any).manage_users_permissions) && (
               <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_USERS)} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
                 <Users className="w-4 h-4" /> إدارة المستخدمين
+              </Button>
+            )}
+            {(permissions.monthly_entry || permissions.view_companies || permissions.manage_companies_contracts ||
+              permissions.manage_member_company_accounts || permissions.enter_expenses || permissions.view_expenses ||
+              permissions.view_revenue || permissions.view_profits || permissions.view_financial_reports ||
+              permissions.issue_distinguished_certificate) && (
+              <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_FINANCIAL)} className="flex items-center gap-1 bg-white/10 text-white border-white/30 hover:bg-white/20">
+                <Landmark className="w-4 h-4" /> الإدارة المالية والنشاطات
               </Button>
             )}
             <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.REGISTRATION)} className="flex items-center gap-2 bg-white/10 text-white border-white/30 hover:bg-white/20">
