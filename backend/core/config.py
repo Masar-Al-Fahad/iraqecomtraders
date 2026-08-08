@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     frontend_url: str = "http://127.0.0.1:5173"
     cors_origins: str = (
         "http://127.0.0.1:5173,http://localhost:5173,"
-        "https://charismatic-luck-production-e42a.up.railway.app"
+        "https://charismatic-luck-production-e42a.up.railway.app,"
+        "https://mfec.iraq-ecom-traders.masaralfahad.com"
     )
 
     # Super Admin seed (set password in .env — never hardcode)
@@ -84,6 +85,7 @@ class Settings(BaseSettings):
             "http://127.0.0.1:5173",
             "http://localhost:5173",
             "https://charismatic-luck-production-e42a.up.railway.app",
+            "https://mfec.iraq-ecom-traders.masaralfahad.com",
         ]
         origins = [
             self._normalize_origin(part)

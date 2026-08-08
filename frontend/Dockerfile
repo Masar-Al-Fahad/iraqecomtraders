@@ -28,7 +28,9 @@ RUN set -e; \
     fi; \
     export VITE_API_BASE_URL="${VITE_API_BASE_URL%/}"; \
     echo "Building frontend with VITE_API_BASE_URL=${VITE_API_BASE_URL}"; \
-    npm run build
+    npm run build; \
+    ! grep -R -F "/api/config" dist; \
+    grep -R -F "$VITE_API_BASE_URL" dist >/dev/null
 
 FROM node:20-alpine
 
