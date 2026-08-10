@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { BarChart3, Building2, FileSpreadsheet, Landmark, Link2, LogOut, Menu, Receipt, Scale, Users, WalletCards } from 'lucide-react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { ArchiveRestore, BarChart3, Building2, FileSpreadsheet, Landmark, Link2, LogOut, Menu, Receipt, Scale, Users, WalletCards } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -13,6 +13,7 @@ import type { Company, PermissionMap, ServiceType } from '@/types/financialErp';
 import { DashboardPage, ExpensesPage, RevenuesPage } from './FinancePages';
 import { CompaniesPage, MemberLinksPage } from './MasterDataPages';
 import { MonthlyPage, ReportsPage, SettlementsPage } from './OperationsPages';
+import { BackupsPage } from './BackupsPage';
 
 const sections=[
   {key:'dashboard',label:'لوحة المؤشرات',icon:BarChart3,permission:'financial.dashboard.view'},
@@ -23,6 +24,7 @@ const sections=[
   {key:'settlements',label:'التسويات',icon:Scale,permission:'financial.settlements.view'},
   {key:'revenues',label:'الإيرادات الفعلية',icon:Landmark,permission:'financial.revenues.view'},
   {key:'expenses',label:'المصاريف',icon:WalletCards,permission:'financial.expenses.view'},
+  {key:'backups',label:'النسخ الاحتياطية',icon:ArchiveRestore,permission:'backups.view'},
 ] as const;
 
 export default function FinancialErp(){
@@ -33,6 +35,7 @@ export default function FinancialErp(){
   const can=(key:string)=>superAdmin||!!permissions[key];
   const finance=superAdmin||['financial.dashboard.view','financial.reports.view','financial.revenues.view','financial.settlements.view'].some(x=>permissions[x]);
   const notify=(error:unknown)=>toast({title:'تعذر إكمال العملية',description:error instanceof Error?error.message:'حدث خطأ غير متوقع',variant:'destructive'});
+  const success=(message:string)=>toast({title:'تمت العملية بنجاح',description:message});
   const reloadCompanies=async()=>setCompanies((await financialErpApi.companies()).items);
 
   useEffect(()=>{(async()=>{try{
@@ -46,9 +49,8 @@ export default function FinancialErp(){
   const requested=tail&&tail!=='legacy'?tail:'';
   const active=allowed.some(x=>x.key===requested)?requested:(allowed[0]?.key||'dashboard');
   useEffect(()=>{if(ready&&active!==requested)navigate(`${ROUTES.ADMIN_FINANCIAL}/${active}`,{replace:true})},[ready,active,requested]);
-  const go=(key:string)=>navigate(`${ROUTES.ADMIN_FINANCIAL}/${key}`);
-  const pageProps={companies,services,can,finance,notify};
-  const content=active==='dashboard'?<DashboardPage {...pageProps}/>:active==='companies'?<CompaniesPage {...pageProps} reloadCompanies={reloadCompanies}/>:active==='links'?<MemberLinksPage {...pageProps}/>:active==='monthly'?<MonthlyPage {...pageProps}/>:active==='reports'?<ReportsPage {...pageProps}/>:active==='settlements'?<SettlementsPage {...pageProps}/>:active==='revenues'?<RevenuesPage {...pageProps}/>:active==='expenses'?<ExpensesPage {...pageProps}/>:null;
+  const pageProps={companies,services,can,finance,notify,success};
+  const content=active==='dashboard'?<DashboardPage {...pageProps}/>:active==='companies'?<CompaniesPage {...pageProps} reloadCompanies={reloadCompanies}/>:active==='links'?<MemberLinksPage {...pageProps}/>:active==='monthly'?<MonthlyPage {...pageProps}/>:active==='reports'?<ReportsPage {...pageProps}/>:active==='settlements'?<SettlementsPage {...pageProps}/>:active==='revenues'?<RevenuesPage {...pageProps}/>:active==='expenses'?<ExpensesPage {...pageProps}/>:active==='backups'?<BackupsPage can={can} notify={notify} success={success}/>:null;
 
   if(denied)return <div dir="rtl" className="min-h-screen grid place-items-center bg-slate-50"><div className="text-center space-y-3"><h1 className="font-bold text-xl">لا توجد صلاحية للإدارة المالية</h1><Button onClick={()=>navigate(ROUTES.ADMIN)}>العودة إلى إدارة العضويات</Button></div></div>;
   if(!ready)return <div dir="rtl" className="min-h-screen bg-slate-50 p-6 space-y-4"><Skeleton className="h-20"/><div className="grid grid-cols-4 gap-4"><Skeleton className="h-28"/><Skeleton className="h-28"/><Skeleton className="h-28"/><Skeleton className="h-28"/></div><Skeleton className="h-96"/></div>;
@@ -64,13 +66,13 @@ export default function FinancialErp(){
       <div className="text-left text-sm"><p>تاريخ الإنشاء</p><b>{new Date().toLocaleDateString('ar-IQ')}</b></div>
     </div>
     <div className="max-w-[1600px] mx-auto p-3 md:p-5 lg:grid lg:grid-cols-[245px_minmax(0,1fr)] gap-5">
-      <aside className="hidden lg:block bg-white border rounded-xl p-2 h-fit sticky top-4 print:hidden"><Nav allowed={allowed} active={active} go={go}/></aside>
-      <div className="lg:hidden mb-3 print:hidden"><Sheet><SheetTrigger asChild><Button variant="outline"><Menu className="w-4 h-4 ml-2"/>أقسام النظام المالي</Button></SheetTrigger><SheetContent side="right" className="pt-12" dir="rtl"><Nav allowed={allowed} active={active} go={go}/></SheetContent></Sheet></div>
-      <main className="min-w-0 space-y-4">{content}</main>
+      <aside className="hidden lg:block bg-white border rounded-xl p-2 h-fit sticky top-4 print:hidden"><Nav allowed={allowed} active={active}/></aside>
+      <div className="lg:hidden mb-3 print:hidden"><Sheet><SheetTrigger asChild><Button type="button" variant="outline"><Menu className="w-4 h-4 ml-2"/>أقسام النظام المالي</Button></SheetTrigger><SheetContent side="right" className="pt-12" dir="rtl"><Nav allowed={allowed} active={active}/></SheetContent></Sheet></div>
+      <main key={active} className="min-w-0 space-y-4">{content}</main>
     </div>
   </div>;
 }
 
-function Nav({allowed,active,go}:{allowed:(typeof sections)[number][];active:string;go:(key:string)=>void}){
-  return <nav className="space-y-1"><p className="px-3 py-2 text-xs font-bold text-slate-400">مساحة العمل المالية</p>{allowed.map(({key,label,icon:Icon})=><Button key={key} variant={active===key?'default':'ghost'} className="w-full justify-start" onClick={()=>go(key)}><Icon className="w-4 h-4 ml-2"/>{label}</Button>)}</nav>;
+function Nav({allowed,active}:{allowed:(typeof sections)[number][];active:string}){
+  return <nav className="space-y-1"><p className="px-3 py-2 text-xs font-bold text-slate-400">مساحة العمل المالية</p>{allowed.map(({key,label,icon:Icon})=><Button key={key} type="button" asChild variant={active===key?'default':'ghost'} className="w-full justify-start"><NavLink to={`${ROUTES.ADMIN_FINANCIAL}/${key}`}><Icon className="w-4 h-4 ml-2"/>{label}</NavLink></Button>)}</nav>;
 }

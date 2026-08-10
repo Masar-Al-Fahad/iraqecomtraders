@@ -31,6 +31,8 @@ export type StatementGridRow = {
   membership_number?:string; governorate:string; registered_name?:string; registered_phone?:string;
   customer_code?:string; customer_portal_url?:string; pricing_item_id:number;
   pricing_item_name:string; unit:string; quantity:number; excluded:boolean;
+  effective_unit_price?:number; effective_mfec_share_type?:'fixed'|'percentage';
+  effective_mfec_share_value?:number;
   gross_business_amount?:number; mfec_due_amount?:number; settlement_status?:string;
 };
 export type ReportLine = {
@@ -43,6 +45,12 @@ export type Settlement = { id:number; batch_number:string; company_id:number; se
 export type Revenue = {
   id:number; receipt_number:string; company_id:number; received_at:string; amount:number; allocated:number; remaining:number;
   receipt_method:string; category?:string; description:string; period_start?:string; period_end?:string;
-  notes?:string; attachment_key?:string; deleted:boolean;
+  notes?:string; attachment_key?:string; created_by?:string; deleted:boolean;
 };
 export type Expense = { id:number; expense_date:string; accounting_year:number; accounting_month:number; category:string; description:string; amount:number; notes?:string; receipt_key?:string; created_by:string; deleted:boolean };
+export type FinancialBackup = {
+  id:number; backup_number:string; kind:string; status:string; notes?:string;
+  size_bytes:number; checksum_sha256:string; created_by:string; created_at:string;
+  restore_requested_by?:string; restore_requested_at?:string;
+  pre_restore_backup_id?:number; deleted:boolean;
+};

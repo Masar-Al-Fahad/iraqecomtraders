@@ -78,6 +78,11 @@ PERMISSION_KEYS = (
     "financial.reports.print",
     "financial.audit.view",
     "financial.certificates.issue",
+    "backups.view",
+    "backups.create",
+    "backups.download",
+    "backups.restore",
+    "backups.delete",
 )
 
 LEGACY_FINANCIAL_PERMISSION_MAP = {

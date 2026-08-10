@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { FileUp, Loader2, Search } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ export const money=(value:number|string|undefined)=>`${Number(value||0).toLocale
 export const statusLabel=(value:string)=>({
   active:'فعال',inactive:'غير فعال',suspended:'معلق',ended:'منتهي',draft:'مسودة',
   approved:'معتمد',settled:'تم التحاسب',unsettled:'غير محاسب',reversed:'معكوس',
+  ready:'جاهزة',restore_requested:'طلب استعادة',deleted:'محذوفة',
 }[value]||value);
 
 export function StatusBadge({value}:{value:string}){
@@ -41,7 +42,16 @@ export function FormDialog({open,onOpenChange,title,children,className='max-w-3x
 }
 
 export function FileButton({label='رفع مرفق',accept='.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp',onFile,disabled}:{label?:string;accept?:string;onFile:(file:File)=>Promise<void>;disabled?:boolean}){
-  return <Button variant="outline" disabled={disabled} asChild><label className="cursor-pointer"><FileUp className="w-4 h-4 ml-2"/>{label}<input className="hidden" type="file" accept={accept} onChange={async e=>{const file=e.target.files?.[0];if(file)await onFile(file);e.currentTarget.value='';}}/></label></Button>;
+  return <Button type="button" variant="outline" disabled={disabled} asChild><label className="cursor-pointer"><FileUp className="w-4 h-4 ml-2"/>{label}<input className="hidden" type="file" accept={accept} onChange={async e=>{const file=e.target.files?.[0];if(file)await onFile(file);e.currentTarget.value='';}}/></label></Button>;
+}
+
+/** Native date input that can never submit a form or mutate client routing on Enter. */
+export function SafeDateInput(props:Omit<ComponentProps<typeof Input>,'type'>){
+  return <Input {...props} type="date" onKeyDown={event=>{
+    event.stopPropagation();
+    if(event.key==='Enter')event.preventDefault();
+    props.onKeyDown?.(event);
+  }}/>;
 }
 
 export function CompactTable({headers,children}:{headers:string[];children:ReactNode}){

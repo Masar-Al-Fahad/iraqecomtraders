@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.database import Base
 from models.financial import (
-    FinancialCompany, MemberAccountItem, MemberCompanyAccount, MonthlyEntryLine,
+    FinancialBackup, FinancialCompany, MemberAccountItem, MemberCompanyAccount, MonthlyEntryLine,
     MonthlyStatement, PricingItem, PricingItemVersion, ReceiptAllocation,
     RevenueReceipt, ServiceType, SettlementBatch,
 )
@@ -22,6 +22,10 @@ from routers.financial_erp import (
 from schemas.auth import UserResponse
 from services.financial_erp import calculate_line, resolve_account_item_pricing, validate_and_add_allocation
 from services.panel_auth import normalize_permissions
+from routers.financial_backups import (
+    BackupCreateIn, RestoreRequestIn, create_backup, download_backup,
+    list_backups, request_restore,
+)
 
 
 def test_legacy_permissions_map_to_granular_rbac():
@@ -123,3 +127,30 @@ async def test_receipt_cannot_cross_companies(db):
     with pytest.raises(HTTPException) as exc:
         await validate_and_add_allocation(db,receipt_id=receipt.id,statement_id=statement.id,settlement_batch_id=None,amount=50,actor="a")
     assert exc.value.status_code==409
+
+
+@pytest.mark.asyncio
+async def test_private_backup_create_list_download_and_restore_request(db, monkeypatch):
+    await seed(db)
+    stored={}
+    async def fake_upload(path,content,*,content_type):
+        stored[path]=(content,content_type)
+        return path
+    async def fake_download(path):
+        return stored[path]
+    monkeypatch.setattr("services.financial_backup.upload_private_financial_bytes",fake_upload)
+    monkeypatch.setattr("routers.financial_backups.download_private_financial_bytes",fake_download)
+    admin=user(**{"backups.create":True,"backups.view":True,"backups.download":True,"backups.restore":True})
+    created=await create_backup(BackupCreateIn(notes="اختبار"),user=admin,db=db)
+    assert created["status"]=="ready" and created["size_bytes"]>0
+    listed=await list_backups(False,_user=admin,db=db)
+    assert listed["items"][0]["backup_number"]==created["backup_number"]
+    response=await download_backup(created["id"],_user=admin,db=db)
+    assert response.media_type=="application/gzip"
+    requested=await request_restore(
+        created["id"],RestoreRequestIn(confirmation="RESTORE",notes="اختبار آمن"),
+        user=admin,db=db,
+    )
+    assert requested["status"]=="restore_requested"
+    assert requested["pre_restore_backup_id"] != created["id"]
+    assert len((await db.execute(select(FinancialBackup))).scalars().all())==2

@@ -65,6 +65,23 @@ export async function downloadAuthorizedFile(urlPath: string, filename: string) 
   URL.revokeObjectURL(link.href);
 }
 
+/** Download a non-XLSX private artifact without exposing auth in its URL. */
+export async function downloadAuthorizedBlob(urlPath: string, filename: string) {
+  const token = localAuth.getToken();
+  const res = await fetch(`${apiBase()}${urlPath.startsWith('/') ? urlPath : `/${urlPath}`}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw Object.assign(new Error(await readError(res)), { status: res.status });
+  const blob = await res.blob();
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
 /** Drop-in replacement for @metagptx/web-sdk client (local mode). */
 export const client = {
   auth: {

@@ -1,7 +1,7 @@
-import { client, downloadAuthorizedFile, getApiBase, localAuth } from '@/lib/localApi';
+import { client, downloadAuthorizedBlob, downloadAuthorizedFile, getApiBase, localAuth } from '@/lib/localApi';
 import type {
   AccountItem, Attachment, Company, Expense, FinancialAccess, MemberAccount, MemberOption,
-  PricingItem, ReportLine, Revenue, ServiceType, Settlement, StatementGridRow,
+  FinancialBackup, PricingItem, ReportLine, Revenue, ServiceType, Settlement, StatementGridRow,
 } from '@/types/financialErp';
 
 const invoke = async <T>(url:string, method='GET', data?:unknown): Promise<T> =>
@@ -58,7 +58,7 @@ export const financialErpApi = {
   addAnnex:(id:number,data:unknown)=>invoke(`/api/v1/admin/financial/member-accounts/${id}/annexes`,'POST',data),
   deleteAnnex:(id:number,annexId:number)=>invoke(`/api/v1/admin/financial/member-accounts/${id}/annexes/${annexId}`,'DELETE'),
   statementGrid: (companyId:number, year:number, month:number) =>
-    invoke<{statement_id:number|null;status:string;items:StatementGridRow[]}>(`/api/v1/admin/financial/statements/grid?company_id=${companyId}&accounting_year=${year}&accounting_month=${month}`),
+    invoke<{statement_id:number|null;status:string;period_start:string;period_end:string;received_at?:string;notes?:string;items:StatementGridRow[]}>(`/api/v1/admin/financial/statements/grid?company_id=${companyId}&accounting_year=${year}&accounting_month=${month}`),
   saveStatement: (data:unknown) => invoke<{statement_id:number;status:string;saved:number}>('/api/v1/admin/financial/statements/bulk','PUT',data),
   approveStatement: (id:number) => invoke(`/api/v1/admin/financial/statements/${id}/approve`,'POST'),
   reopenStatement: (id:number,reason:string) => invoke(`/api/v1/admin/financial/statements/${id}/reopen`,'POST',{reason}),
@@ -86,5 +86,10 @@ export const financialErpApi = {
   deleteExpense:(id:number)=>invoke(`/api/v1/admin/financial/expenses/${id}`,'DELETE'),
   restoreExpense:(id:number)=>invoke(`/api/v1/admin/financial/expenses/${id}/restore`,'POST'),
   exportExpenses:(filters:Record<string,unknown>)=>downloadAuthorizedFile(`/api/v1/admin/financial/expenses.xlsx?${qs(filters)}`,'mfec-expenses.xlsx'),
+  backups:(includeDeleted=false)=>invoke<{items:FinancialBackup[]}>(`/api/v1/admin/financial/backups?${qs({include_deleted:includeDeleted})}`),
+  createBackup:(notes:string)=>invoke<FinancialBackup>('/api/v1/admin/financial/backups','POST',{notes:notes||null}),
+  downloadBackup:(id:number,number:string)=>downloadAuthorizedBlob(`/api/v1/admin/financial/backups/${id}/download`,`${number}.json.gz`),
+  requestRestore:(id:number,confirmation:string,notes:string)=>invoke(`/api/v1/admin/financial/backups/${id}/restore-request`,'POST',{confirmation,notes:notes||null}),
+  deleteBackup:(id:number)=>invoke(`/api/v1/admin/financial/backups/${id}`,'DELETE'),
   upload,openDocument,query:qs,
 };

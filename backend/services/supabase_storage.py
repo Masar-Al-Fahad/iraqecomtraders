@@ -134,6 +134,14 @@ async def ensure_financial_private_bucket() -> None:
     client = _shared_client()
     url = f"{_base_url()}/storage/v1/bucket"
     headers = {**_headers(), "Content-Type": "application/json"}
+    allowed_types = [
+        "application/pdf", "image/jpeg", "image/png", "image/webp",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/gzip", "application/json",
+    ]
     resp = await client.post(
         url,
         headers=headers,
@@ -141,14 +149,8 @@ async def ensure_financial_private_bucket() -> None:
             "id": FINANCIAL_PRIVATE_BUCKET,
             "name": FINANCIAL_PRIVATE_BUCKET,
             "public": False,
-            "file_size_limit": 10 * 1024 * 1024,
-            "allowed_mime_types": [
-                "application/pdf", "image/jpeg", "image/png", "image/webp",
-                "application/msword",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.ms-excel",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ],
+            "file_size_limit": 50 * 1024 * 1024,
+            "allowed_mime_types": allowed_types,
         },
     )
     if resp.status_code not in (200, 201, 409):
@@ -157,6 +159,18 @@ async def ensure_financial_private_bucket() -> None:
             raise SupabaseStorageError(
                 f"تعذر تجهيز مخزن المستندات الخاصة ({resp.status_code})"
             )
+    if resp.status_code in (400, 409):
+        update = await client.put(
+            f"{url}/{FINANCIAL_PRIVATE_BUCKET}",
+            headers=headers,
+            json={
+                "public": False,
+                "file_size_limit": 50 * 1024 * 1024,
+                "allowed_mime_types": allowed_types,
+            },
+        )
+        if update.status_code not in (200, 201):
+            raise SupabaseStorageError("تعذر تحديث إعدادات مخزن المستندات الخاصة")
 
 
 async def upload_private_financial_bytes(
@@ -194,6 +208,19 @@ async def download_private_financial_bytes(object_path: str) -> Tuple[bytes, str
         or mimetypes.guess_type(path)[0]
         or "application/octet-stream",
     )
+
+
+async def delete_private_financial_object(object_path: str) -> bool:
+    """Delete a private financial artifact; callers retain database audit metadata."""
+    path = object_path.replace("\\", "/").lstrip("/")
+    if not path or ".." in path.split("/"):
+        return False
+    encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
+    url = f"{_base_url()}/storage/v1/object/{FINANCIAL_PRIVATE_BUCKET}/{encoded}"
+    resp = await _shared_client().delete(url, headers=_headers())
+    if resp.status_code in (200, 204, 404):
+        return True
+    raise SupabaseStorageError(f"تعذر حذف الملف الخاص ({resp.status_code})")
 
 
 async def download_bytes(object_path: str) -> Tuple[bytes, str]:

@@ -442,3 +442,27 @@ class ReceiptAllocation(Base):
         ),
         Index("ix_fin_allocation_receipt", "receipt_id"),
     )
+
+
+class FinancialBackup(Base):
+    """Private logical backup artifact and audited restore-request metadata."""
+    __tablename__ = "financial_backups"
+    id = Column(Integer, primary_key=True)
+    backup_number = Column(String(50), nullable=False, unique=True)
+    object_key = Column(String(500), nullable=False)
+    kind = Column(String(30), nullable=False, default="manual")
+    status = Column(String(30), nullable=False, default="ready")
+    notes = Column(Text)
+    size_bytes = Column(Integer, nullable=False, default=0)
+    checksum_sha256 = Column(String(64), nullable=False)
+    created_by = Column(String(200), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.now, nullable=False)
+    restore_requested_by = Column(String(200))
+    restore_requested_at = Column(DateTime(timezone=True))
+    pre_restore_backup_id = Column(Integer, ForeignKey("financial_backups.id", ondelete="SET NULL"))
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(String(200))
+    __table_args__ = (
+        Index("ix_fin_backup_created_status", "created_at", "status"),
+        Index("ix_fin_backup_deleted", "deleted_at"),
+    )

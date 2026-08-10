@@ -72,6 +72,8 @@ class StatementBulkIn(BaseModel):
     company_id: int
     accounting_year: int = Field(ge=2000, le=2200)
     accounting_month: int = Field(ge=1, le=12)
+    period_start: date | None = None
+    period_end: date | None = None
     received_at: date | None = None
     notes: str | None = None
     lines: list[StatementLineIn]
@@ -398,6 +400,10 @@ async def add_statement_attachment(
     if statement.status=="approved":raise HTTPException(409,"لا يمكن تعديل مرفقات كشف معتمد")
     if not data.object_key.startswith("financial/"):raise HTTPException(400,"مسار المستند غير صالح")
     actor=await resolve_actor_name(db,user)
+    if data.replaced_id:
+        replaced=await db.get(StatementAttachment,data.replaced_id)
+        if not replaced or replaced.statement_id!=statement_id:raise HTTPException(409,"المرفق المستبدل لا يتبع الكشف")
+        replaced.deleted_at=datetime.now();replaced.deleted_by=actor
     row=StatementAttachment(statement_id=statement_id,object_key=data.object_key,
         original_filename=data.original_filename,mime_type=data.mime_type,size_bytes=data.size_bytes,
         uploaded_by=actor,replaced_attachment_id=data.replaced_id)
@@ -469,15 +475,41 @@ async def statement_grid(
             "quantity": float(old.quantity) if old else 0,
             "excluded": bool(old and old.excluded_at),
         }
-        if finance and old:
-            row.update({
-                "company_unit_price_snapshot": float(old.company_unit_price_snapshot),
-                "mfec_due_amount": float(old.mfec_due_amount),
-                "gross_business_amount": float(old.gross_business_amount),
-                "settlement_status": old.settlement_status,
-            })
+        if finance:
+            if old:
+                row.update({
+                    "effective_unit_price": float(old.company_unit_price_snapshot),
+                    "effective_mfec_share_type": old.mfec_share_type_snapshot,
+                    "effective_mfec_share_value": float(old.mfec_share_value_snapshot),
+                    "mfec_due_amount": float(old.mfec_due_amount),
+                    "gross_business_amount": float(old.gross_business_amount),
+                    "settlement_status": old.settlement_status,
+                })
+            else:
+                _item, _version, unit_price, share_type, share_value = await resolve_account_item_pricing(
+                    db, link, account, date(accounting_year, accounting_month, 1)
+                )
+                gross, due = calculate_line(0, unit_price, share_type, share_value)
+                row.update({
+                    "effective_unit_price": float(unit_price),
+                    "effective_mfec_share_type": share_type,
+                    "effective_mfec_share_value": float(share_value),
+                    "gross_business_amount": float(gross),
+                    "mfec_due_amount": float(due),
+                    "settlement_status": "unsettled",
+                })
         items.append(row)
-    return {"statement_id": statement.id if statement else None, "status": statement.status if statement else "draft", "items": items}
+    return {
+        "statement_id": statement.id if statement else None,
+        "status": statement.status if statement else "draft",
+        "period_start": (statement.period_start if statement else date(accounting_year, accounting_month, 1)).isoformat(),
+        "period_end": (statement.period_end if statement else date(
+            accounting_year, accounting_month, monthrange(accounting_year, accounting_month)[1]
+        )).isoformat(),
+        "received_at": statement.received_at.isoformat() if statement and statement.received_at else None,
+        "notes": statement.notes if statement else None,
+        "items": items,
+    }
 
 
 @router.put("/statements/bulk")
@@ -488,6 +520,10 @@ async def save_statement_bulk(
 ):
     actor = await resolve_actor_name(db, user)
     statement, start, end, grid, existing = await _statement_grid(db, data.company_id, data.accounting_year, data.accounting_month)
+    start = data.period_start or start
+    end = data.period_end or end
+    if end < start:
+        raise HTTPException(400, "تاريخ نهاية الفترة يجب أن يكون بعد تاريخ البداية")
     if statement and statement.status == "approved":
         raise HTTPException(409, "الكشف معتمد؛ أعد فتحه قبل التعديل")
     if not statement:
@@ -496,6 +532,9 @@ async def save_statement_bulk(
             period_start=start, period_end=end, received_at=data.received_at, notes=data.notes, entered_by=actor,
         )
         db.add(statement); await db.flush()
+    else:
+        statement.period_start=start;statement.period_end=end
+        statement.received_at=data.received_at;statement.notes=data.notes
     links = {link.id: (account, link, member, item) for account, link, member, item in grid}
     saved = 0
     for incoming in data.lines:
@@ -683,7 +722,8 @@ async def list_revenues(
         "remaining":float(money(x.amount)-money(a)),"receipt_method":x.receipt_method,
         "category":x.category,"description":x.description,"period_start":x.period_start.isoformat() if x.period_start else None,
         "period_end":x.period_end.isoformat() if x.period_end else None,"notes":x.notes,
-        "attachment_key":x.attachment_key,"deleted":bool(x.deleted_at)} for x,a in rows]}
+        "attachment_key":x.attachment_key,"created_by":x.created_by,
+        "deleted":bool(x.deleted_at)} for x,a in rows]}
 
 
 @router.put("/revenues/{receipt_id}")
@@ -746,6 +786,7 @@ async def allocate_revenue(
 @router.get("/revenues.xlsx")
 async def revenues_xlsx(
     company_id:int|None=None,date_from:date|None=None,date_to:date|None=None,
+    selected_ids:list[int]|None=Query(default=None),
     _user:UserResponse=Depends(require_permission("financial.reports.xlsx")),db:AsyncSession=Depends(get_db),
 ):
     stmt=select(RevenueReceipt,FinancialCompany).join(FinancialCompany,FinancialCompany.id==RevenueReceipt.company_id).where(
@@ -753,6 +794,7 @@ async def revenues_xlsx(
     if company_id:stmt=stmt.where(RevenueReceipt.company_id==company_id)
     if date_from:stmt=stmt.where(RevenueReceipt.received_at>=date_from)
     if date_to:stmt=stmt.where(RevenueReceipt.received_at<=date_to)
+    if selected_ids:stmt=stmt.where(RevenueReceipt.id.in_(selected_ids))
     rows=(await db.execute(stmt.order_by(RevenueReceipt.received_at.desc()))).all()
     payload=build_erp_xlsx([{"receipt":x.receipt_number,"company":c.name,"date":x.received_at.isoformat(),
         "amount":x.amount,"method":x.receipt_method,"category":x.category or "","description":x.description}
@@ -810,6 +852,7 @@ async def restore_expense(
 @router.get("/expenses.xlsx")
 async def expenses_xlsx(
     accounting_year:int|None=None,accounting_month:int|None=None,date_from:date|None=None,date_to:date|None=None,
+    selected_ids:list[int]|None=Query(default=None),
     _user:UserResponse=Depends(require_permission("financial.reports.xlsx")),db:AsyncSession=Depends(get_db),
 ):
     stmt=select(FinancialExpense).where(FinancialExpense.deleted_at.is_(None))
@@ -817,6 +860,7 @@ async def expenses_xlsx(
     if accounting_month:stmt=stmt.where(FinancialExpense.accounting_month==accounting_month)
     if date_from:stmt=stmt.where(FinancialExpense.expense_date>=date_from)
     if date_to:stmt=stmt.where(FinancialExpense.expense_date<=date_to)
+    if selected_ids:stmt=stmt.where(FinancialExpense.id.in_(selected_ids))
     rows=(await db.execute(stmt.order_by(FinancialExpense.expense_date.desc()))).scalars().all()
     payload=build_erp_xlsx([{"date":x.expense_date.isoformat(),"category":x.category,"description":x.description,
         "amount":x.amount,"notes":x.notes or "","created_by":x.created_by} for x in rows],

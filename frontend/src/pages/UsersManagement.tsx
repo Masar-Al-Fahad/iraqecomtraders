@@ -68,6 +68,9 @@ const financialPermissionLabels = [
   ['financial.reports.view', 'التقارير: مشاهدة'], ['financial.reports.pdf', 'التقارير: PDF'],
   ['financial.reports.xlsx', 'التقارير: Excel'], ['financial.reports.print', 'التقارير: طباعة'],
   ['financial.audit.view', 'سجل التدقيق المالي'], ['financial.certificates.issue', 'إصدار الشهادات'],
+  ['backups.view', 'النسخ الاحتياطية: مشاهدة'], ['backups.create', 'النسخ الاحتياطية: إنشاء'],
+  ['backups.download', 'النسخ الاحتياطية: تنزيل'], ['backups.restore', 'النسخ الاحتياطية: طلب استعادة'],
+  ['backups.delete', 'النسخ الاحتياطية: حذف'],
 ] as const;
 
 interface PanelUser {
