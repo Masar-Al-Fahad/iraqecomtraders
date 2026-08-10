@@ -6,6 +6,7 @@
     "build": "vite build",
     "start": "serve -s dist -c serve.json -l tcp://0.0.0.0:${PORT:-3000}",
     "lint": "eslint --quiet ./src",
+    "test:financial-smoke": "node tests/financial-route-smoke.mjs",
     "preview": "vite preview",
     "postinstall": "echo 'Dependencies installed successfully'"
   },

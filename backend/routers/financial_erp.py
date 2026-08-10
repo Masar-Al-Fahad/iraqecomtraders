@@ -18,12 +18,12 @@ from models.financial import (
     CompanyAttachment, FinancialCompany, FinancialExpense, MemberAccountItem, MemberAnnex, MemberCompanyAccount,
     MonthlyEntryLine, MonthlyStatement, PricingItem, PricingItemVersion,
     ReceiptAllocation, RevenueReceipt, ServiceType, SettlementBatch, SettlementLine,
-    SettlementReversal,
+    SettlementReversal, StatementAttachment,
 )
 from models.registrations import Registrations
 from schemas.auth import UserResponse
 from services.actor import resolve_actor_name
-from services.financial import add_audit, build_financial_xlsx
+from services.financial import add_audit, build_erp_xlsx, build_financial_xlsx
 from services.financial_erp import (
     calculate_line, money, resolve_account_item_pricing, validate_and_add_allocation,
 )
@@ -106,6 +106,10 @@ class ReceiptIn(BaseModel):
     period_end: date | None = None
     notes: str | None = None
     attachment_key: str | None = None
+
+
+class ReceiptUpdateIn(ReceiptIn):
+    pass
 
 
 class AllocationIn(BaseModel):
@@ -225,6 +229,18 @@ async def delete_company_attachment(
     await db.commit();return {"id":row.id,"deleted":True}
 
 
+@router.delete("/member-accounts/{account_id}/annexes/{annex_id}")
+async def delete_annex(
+    account_id:int,annex_id:int,user:UserResponse=Depends(require_permission("financial.annexes.manage")),
+    db:AsyncSession=Depends(get_db),
+):
+    row=await db.get(MemberAnnex,annex_id)
+    if not row or row.account_id!=account_id:raise HTTPException(404,"الملحق غير موجود")
+    actor=await resolve_actor_name(db,user);row.deleted_at=datetime.now();row.deleted_by=actor
+    add_audit(db,action="annex.delete",entity_type="member_annex",entity_id=row.id,actor=actor)
+    await db.commit();return {"id":row.id,"deleted":True}
+
+
 @router.post("/pricing-items/{item_id}/versions")
 async def create_pricing_version(
     item_id: int, data: PricingItemIn,
@@ -249,15 +265,35 @@ async def create_pricing_version(
     return {"id": version.id, "version": version_no}
 
 
+@router.get("/pricing-items/{item_id}/versions")
+async def list_pricing_versions(
+    item_id:int,_user:UserResponse=Depends(require_any_permission("financial.companies.view","financial.pricing.manage")),
+    db:AsyncSession=Depends(get_db),
+):
+    rows=(await db.execute(select(PricingItemVersion).where(
+        PricingItemVersion.pricing_item_id==item_id).order_by(PricingItemVersion.version.desc()))).scalars().all()
+    return {"items":[{"id":x.id,"version":x.version,"company_unit_price":float(x.company_unit_price),
+        "mfec_share_type":x.mfec_share_type,"mfec_share_value":float(x.mfec_share_value),
+        "effective_from":x.effective_from.isoformat(),"effective_to":x.effective_to.isoformat() if x.effective_to else None,
+        "notes":x.notes,"created_by":x.created_by} for x in rows]}
+
+
 @router.get("/member-accounts/{account_id}/items")
 async def list_account_items(
     account_id: int,
     _user: UserResponse = Depends(require_any_permission("financial.member_links.view", "financial.monthly.view")),
     db: AsyncSession = Depends(get_db),
 ):
+    account=await db.get(MemberCompanyAccount,account_id)
+    if not account:raise HTTPException(404,"ارتباط العضو غير موجود")
+    latest=select(PricingItemVersion.pricing_item_id,func.max(PricingItemVersion.version).label("version")).group_by(
+        PricingItemVersion.pricing_item_id).subquery()
     rows = (await db.execute(
-        select(MemberAccountItem, PricingItem)
+        select(MemberAccountItem, PricingItem, PricingItemVersion)
         .join(PricingItem, PricingItem.id == MemberAccountItem.pricing_item_id)
+        .outerjoin(latest,latest.c.pricing_item_id==PricingItem.id)
+        .outerjoin(PricingItemVersion,and_(PricingItemVersion.pricing_item_id==latest.c.pricing_item_id,
+            PricingItemVersion.version==latest.c.version))
         .where(MemberAccountItem.account_id == account_id).order_by(PricingItem.name)
     )).all()
     return {"items": [{
@@ -265,8 +301,16 @@ async def list_account_items(
         "unit_price_override": float(link.unit_price_override) if link.unit_price_override is not None else None,
         "mfec_share_type_override": link.mfec_share_type_override,
         "mfec_share_value_override": float(link.mfec_share_value_override) if link.mfec_share_value_override is not None else None,
+        "effective_unit_price":float(link.unit_price_override if link.unit_price_override is not None else
+            account.default_unit_price_override if account.default_unit_price_override is not None else version.company_unit_price if version else 0),
+        "effective_mfec_share_type":link.mfec_share_type_override or account.default_mfec_share_type_override or
+            (version.mfec_share_type if version else None),
+        "effective_mfec_share_value":float(link.mfec_share_value_override if link.mfec_share_value_override is not None else
+            account.default_mfec_share_value_override if account.default_mfec_share_value_override is not None else
+            version.mfec_share_value if version else 0),
+        "started_at":link.started_at.isoformat() if link.started_at else None,
         "is_active": link.is_active,
-    } for link, item in rows]}
+    } for link, item, version in rows]}
 
 
 @router.put("/member-accounts/{account_id}/items")
@@ -319,6 +363,54 @@ async def add_annex(
     db.add(row);await db.flush()
     add_audit(db,action="annex.create",entity_type="member_annex",entity_id=row.id,actor=actor,new_values=data.model_dump())
     await db.commit();return {"id":row.id}
+
+
+@router.get("/statements/{statement_id}/attachments")
+async def list_statement_attachments(
+    statement_id:int,
+    _user:UserResponse=Depends(require_any_permission("financial.monthly.view","financial.monthly.enter","financial.monthly.edit")),
+    db:AsyncSession=Depends(get_db),
+):
+    rows=(await db.execute(select(StatementAttachment).where(
+        StatementAttachment.statement_id==statement_id,StatementAttachment.deleted_at.is_(None)
+    ).order_by(StatementAttachment.uploaded_at.desc()))).scalars().all()
+    return {"items":[{"id":x.id,"object_key":x.object_key,"original_filename":x.original_filename,
+        "mime_type":x.mime_type,"size_bytes":x.size_bytes,"uploaded_at":x.uploaded_at.isoformat() if x.uploaded_at else None}
+        for x in rows]}
+
+
+@router.post("/statements/{statement_id}/attachments")
+async def add_statement_attachment(
+    statement_id:int,data:DocumentMetaIn,
+    user:UserResponse=Depends(require_any_permission("financial.monthly.enter","financial.monthly.edit")),
+    db:AsyncSession=Depends(get_db),
+):
+    statement=await db.get(MonthlyStatement,statement_id)
+    if not statement:raise HTTPException(404,"الكشف غير موجود")
+    if statement.status=="approved":raise HTTPException(409,"لا يمكن تعديل مرفقات كشف معتمد")
+    if not data.object_key.startswith("financial/"):raise HTTPException(400,"مسار المستند غير صالح")
+    actor=await resolve_actor_name(db,user)
+    row=StatementAttachment(statement_id=statement_id,object_key=data.object_key,
+        original_filename=data.original_filename,mime_type=data.mime_type,size_bytes=data.size_bytes,
+        uploaded_by=actor,replaced_attachment_id=data.replaced_id)
+    db.add(row);await db.flush()
+    add_audit(db,action="statement_attachment.create",entity_type="statement_attachment",entity_id=row.id,actor=actor,new_values=data.model_dump())
+    await db.commit();return {"id":row.id}
+
+
+@router.delete("/statements/{statement_id}/attachments/{attachment_id}")
+async def delete_statement_attachment(
+    statement_id:int,attachment_id:int,
+    user:UserResponse=Depends(require_any_permission("financial.monthly.enter","financial.monthly.edit")),
+    db:AsyncSession=Depends(get_db),
+):
+    statement=await db.get(MonthlyStatement,statement_id)
+    row=await db.get(StatementAttachment,attachment_id)
+    if not statement or not row or row.statement_id!=statement_id:raise HTTPException(404,"المرفق غير موجود")
+    if statement.status=="approved":raise HTTPException(409,"لا يمكن تعديل مرفقات كشف معتمد")
+    actor=await resolve_actor_name(db,user);row.deleted_at=datetime.now();row.deleted_by=actor
+    add_audit(db,action="statement_attachment.delete",entity_type="statement_attachment",entity_id=row.id,actor=actor)
+    await db.commit();return {"id":row.id,"deleted":True}
 
 
 async def _statement_grid(db: AsyncSession, company_id: int, year: int, month: int):
@@ -526,7 +618,30 @@ async def list_settlements(
     stmt = select(SettlementBatch).order_by(SettlementBatch.settled_at.desc(), SettlementBatch.id.desc())
     if company_id: stmt=stmt.where(SettlementBatch.company_id == company_id)
     rows=(await db.execute(stmt)).scalars().all()
-    return {"items":[{"id":x.id,"batch_number":x.batch_number,"company_id":x.company_id,"settled_at":x.settled_at.isoformat(),"status":x.status,"reference_number":x.reference_number} for x in rows]}
+    ids=[x.id for x in rows]
+    counts={}
+    if ids:
+        counts=dict((await db.execute(select(SettlementLine.batch_id,func.count(SettlementLine.id)).where(
+            SettlementLine.batch_id.in_(ids)).group_by(SettlementLine.batch_id))).all())
+    return {"items":[{"id":x.id,"batch_number":x.batch_number,"company_id":x.company_id,
+        "settled_at":x.settled_at.isoformat(),"status":x.status,"reference_number":x.reference_number,
+        "notes":x.notes,"attachment_key":x.attachment_key,"line_count":counts.get(x.id,0)}
+        for x in rows]}
+
+
+@router.get("/settlements/{batch_id}/lines")
+async def settlement_lines(
+    batch_id:int,_user:UserResponse=Depends(require_permission("financial.settlements.view")),
+    db:AsyncSession=Depends(get_db),
+):
+    rows=(await db.execute(select(SettlementLine,MonthlyEntryLine,Registrations,PricingItem)
+        .join(MonthlyEntryLine,MonthlyEntryLine.id==SettlementLine.entry_line_id)
+        .join(Registrations,Registrations.id==MonthlyEntryLine.member_id)
+        .join(PricingItem,PricingItem.id==MonthlyEntryLine.pricing_item_id)
+        .where(SettlementLine.batch_id==batch_id))).all()
+    return {"items":[{"id":sl.id,"entry_line_id":line.id,"member_name":member.merchant_name,
+        "membership_number":member.membership_number,"pricing_item":item.name,
+        "quantity":float(line.quantity),"amount":float(sl.amount_snapshot)} for sl,line,member,item in rows]}
 
 
 @router.post("/revenues")
@@ -555,7 +670,58 @@ async def list_revenues(
     if date_from: stmt=stmt.where(RevenueReceipt.received_at>=date_from)
     if date_to: stmt=stmt.where(RevenueReceipt.received_at<=date_to)
     rows=(await db.execute(stmt)).all()
-    return {"items":[{"id":x.id,"receipt_number":x.receipt_number,"company_id":x.company_id,"received_at":x.received_at.isoformat(),"amount":float(x.amount),"allocated":float(a),"remaining":float(money(x.amount)-money(a)),"receipt_method":x.receipt_method,"description":x.description,"deleted":bool(x.deleted_at)} for x,a in rows]}
+    return {"items":[{"id":x.id,"receipt_number":x.receipt_number,"company_id":x.company_id,
+        "received_at":x.received_at.isoformat(),"amount":float(x.amount),"allocated":float(a),
+        "remaining":float(money(x.amount)-money(a)),"receipt_method":x.receipt_method,
+        "category":x.category,"description":x.description,"period_start":x.period_start.isoformat() if x.period_start else None,
+        "period_end":x.period_end.isoformat() if x.period_end else None,"notes":x.notes,
+        "attachment_key":x.attachment_key,"deleted":bool(x.deleted_at)} for x,a in rows]}
+
+
+@router.put("/revenues/{receipt_id}")
+async def update_revenue(
+    receipt_id:int,data:ReceiptUpdateIn,user:UserResponse=Depends(require_permission("financial.revenues.edit")),
+    db:AsyncSession=Depends(get_db),
+):
+    row=await db.get(RevenueReceipt,receipt_id)
+    if not row:raise HTTPException(404,"وصل القبض غير موجود")
+    allocated=(await db.execute(select(func.coalesce(func.sum(ReceiptAllocation.allocated_amount),0)).where(
+        ReceiptAllocation.receipt_id==receipt_id))).scalar_one()
+    if money(data.amount)<money(allocated):raise HTTPException(409,"المبلغ أقل من المبلغ المخصص")
+    actor=await resolve_actor_name(db,user)
+    old={k:getattr(row,k) for k in data.model_dump()}
+    for key,value in data.model_dump().items():setattr(row,key,value)
+    row.updated_by=actor
+    add_audit(db,action="revenue.update",entity_type="revenue_receipt",entity_id=row.id,actor=actor,old_values=old,new_values=data.model_dump())
+    await db.commit();return {"id":row.id}
+
+
+@router.get("/revenues/{receipt_id}/allocations")
+async def list_revenue_allocations(
+    receipt_id:int,_user:UserResponse=Depends(require_permission("financial.revenues.view")),
+    db:AsyncSession=Depends(get_db),
+):
+    rows=(await db.execute(select(ReceiptAllocation).where(ReceiptAllocation.receipt_id==receipt_id)
+        .order_by(ReceiptAllocation.created_at.desc()))).scalars().all()
+    return {"items":[{"id":x.id,"statement_id":x.statement_id,"settlement_batch_id":x.settlement_batch_id,
+        "amount":float(x.allocated_amount),"created_at":x.created_at.isoformat() if x.created_at else None} for x in rows]}
+
+
+@router.get("/revenues/{receipt_id}/allocation-targets")
+async def revenue_allocation_targets(
+    receipt_id:int,_user:UserResponse=Depends(require_permission("financial.revenues.view")),
+    db:AsyncSession=Depends(get_db),
+):
+    receipt=await db.get(RevenueReceipt,receipt_id)
+    if not receipt:raise HTTPException(404,"وصل القبض غير موجود")
+    statements=(await db.execute(select(MonthlyStatement).where(
+        MonthlyStatement.company_id==receipt.company_id,MonthlyStatement.status=="approved"
+    ).order_by(MonthlyStatement.accounting_year.desc(),MonthlyStatement.accounting_month.desc()))).scalars().all()
+    batches=(await db.execute(select(SettlementBatch).where(
+        SettlementBatch.company_id==receipt.company_id,SettlementBatch.status=="active"
+    ).order_by(SettlementBatch.settled_at.desc()))).scalars().all()
+    return {"statements":[{"id":x.id,"label":f"{x.accounting_month:02d}/{x.accounting_year}"} for x in statements],
+        "settlements":[{"id":x.id,"label":x.batch_number,"settled_at":x.settled_at.isoformat()} for x in batches]}
 
 
 @router.post("/revenues/{receipt_id}/allocations")
@@ -567,6 +733,26 @@ async def allocate_revenue(
     add_audit(db,action="revenue.allocate",entity_type="revenue_receipt",entity_id=receipt_id,actor=actor,new_values=data.model_dump())
     await db.commit()
     return {"id":allocation.id}
+
+
+@router.get("/revenues.xlsx")
+async def revenues_xlsx(
+    company_id:int|None=None,date_from:date|None=None,date_to:date|None=None,
+    _user:UserResponse=Depends(require_permission("financial.reports.xlsx")),db:AsyncSession=Depends(get_db),
+):
+    stmt=select(RevenueReceipt,FinancialCompany).join(FinancialCompany,FinancialCompany.id==RevenueReceipt.company_id).where(
+        RevenueReceipt.deleted_at.is_(None))
+    if company_id:stmt=stmt.where(RevenueReceipt.company_id==company_id)
+    if date_from:stmt=stmt.where(RevenueReceipt.received_at>=date_from)
+    if date_to:stmt=stmt.where(RevenueReceipt.received_at<=date_to)
+    rows=(await db.execute(stmt.order_by(RevenueReceipt.received_at.desc()))).all()
+    payload=build_erp_xlsx([{"receipt":x.receipt_number,"company":c.name,"date":x.received_at.isoformat(),
+        "amount":x.amount,"method":x.receipt_method,"category":x.category or "","description":x.description}
+        for x,c in rows],[("receipt","رقم الوصل"),("company","الشركة"),("date","التاريخ"),("amount","المبلغ"),
+        ("method","طريقة القبض"),("category","التصنيف"),("description","الوصف")],"كشف الإيرادات الفعلية",
+        f"الفترة: {date_from or 'البداية'} — {date_to or 'اليوم'}")
+    return StreamingResponse(iter([payload]),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":'attachment; filename="mfec-revenues.xlsx"'})
 
 
 @router.delete("/revenues/{receipt_id}")
@@ -611,6 +797,26 @@ async def restore_expense(
     actor=await resolve_actor_name(db,user); row.deleted_at=None; row.deleted_by=None; row.restored_at=datetime.now(); row.restored_by=actor
     add_audit(db,action="expense.restore",entity_type="expense",entity_id=row.id,actor=actor)
     await db.commit(); return {"id":row.id,"deleted":False}
+
+
+@router.get("/expenses.xlsx")
+async def expenses_xlsx(
+    accounting_year:int|None=None,accounting_month:int|None=None,date_from:date|None=None,date_to:date|None=None,
+    _user:UserResponse=Depends(require_permission("financial.reports.xlsx")),db:AsyncSession=Depends(get_db),
+):
+    stmt=select(FinancialExpense).where(FinancialExpense.deleted_at.is_(None))
+    if accounting_year:stmt=stmt.where(FinancialExpense.accounting_year==accounting_year)
+    if accounting_month:stmt=stmt.where(FinancialExpense.accounting_month==accounting_month)
+    if date_from:stmt=stmt.where(FinancialExpense.expense_date>=date_from)
+    if date_to:stmt=stmt.where(FinancialExpense.expense_date<=date_to)
+    rows=(await db.execute(stmt.order_by(FinancialExpense.expense_date.desc()))).scalars().all()
+    payload=build_erp_xlsx([{"date":x.expense_date.isoformat(),"category":x.category,"description":x.description,
+        "amount":x.amount,"notes":x.notes or "","created_by":x.created_by} for x in rows],
+        [("date","التاريخ"),("category","التصنيف"),("description","الوصف"),("amount","المبلغ"),
+        ("notes","ملاحظات"),("created_by","المستخدم")],"كشف المصروفات",
+        f"الفترة: {accounting_month or 'كل الأشهر'}/{accounting_year or 'كل السنوات'}")
+    return StreamingResponse(iter([payload]),media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":'attachment; filename="mfec-expenses.xlsx"'})
 
 
 async def _report_lines(
@@ -677,11 +883,14 @@ async def report_lines(
 
 @router.get("/reports/lines.xlsx")
 async def report_lines_xlsx(
-    company_id:int|None=None,member_id:int|None=None,accounting_year:int|None=None,accounting_month:int|None=None,
+    company_id:int|None=None,member_id:int|None=None,service_type_id:int|None=None,pricing_item_id:int|None=None,
+    governorate:str|None=None,accounting_year:int|None=None,accounting_month:int|None=None,
+    date_from:date|None=None,date_to:date|None=None,settlement_status:Literal["settled","unsettled"]|None=None,
     selected_ids:list[int]|None=Query(default=None),
     _user:UserResponse=Depends(require_permission("financial.reports.xlsx")),db:AsyncSession=Depends(get_db),
 ):
-    items=await _report_lines(db,company_id,member_id,None,None,None,accounting_year,accounting_month,None,None,None,selected_ids)
+    items=await _report_lines(db,company_id,member_id,service_type_id,pricing_item_id,governorate,
+        accounting_year,accounting_month,date_from,date_to,settlement_status,selected_ids)
     mapped=[{"membership_number":x["membership_number"],"member_name":x["member_name"],"governorate":x["governorate"],
              "shipping_operations":x["quantity"] if "شحن" in x["service_type"] else 0,"shipping_revenue":x["mfec_due_amount"] if "شحن" in x["service_type"] else 0,
              "delivery_operations":x["quantity"] if "توصيل" in x["service_type"] else 0,"delivery_revenue":x["mfec_due_amount"] if "توصيل" in x["service_type"] else 0,
@@ -700,9 +909,32 @@ async def erp_dashboard(
 ):
     items=await _report_lines(db,None,None,None,None,None,accounting_year,accounting_month,date_from,date_to,None,None)
     due=money(sum(Decimal(str(x["mfec_due_amount"])) for x in items))
-    received=(await db.execute(select(func.coalesce(func.sum(RevenueReceipt.amount),0)).where(RevenueReceipt.deleted_at.is_(None)))).scalar_one()
-    expenses=(await db.execute(select(func.coalesce(func.sum(FinancialExpense.amount),0)).where(FinancialExpense.deleted_at.is_(None)))).scalar_one()
+    receipt_stmt=select(func.coalesce(func.sum(RevenueReceipt.amount),0)).where(RevenueReceipt.deleted_at.is_(None))
+    expense_stmt=select(func.coalesce(func.sum(FinancialExpense.amount),0)).where(FinancialExpense.deleted_at.is_(None))
+    if accounting_year:
+        receipt_stmt=receipt_stmt.where(func.extract("year",RevenueReceipt.received_at)==accounting_year)
+        expense_stmt=expense_stmt.where(FinancialExpense.accounting_year==accounting_year)
+    if accounting_month:
+        receipt_stmt=receipt_stmt.where(func.extract("month",RevenueReceipt.received_at)==accounting_month)
+        expense_stmt=expense_stmt.where(FinancialExpense.accounting_month==accounting_month)
+    if date_from:
+        receipt_stmt=receipt_stmt.where(RevenueReceipt.received_at>=date_from)
+        expense_stmt=expense_stmt.where(FinancialExpense.expense_date>=date_from)
+    if date_to:
+        receipt_stmt=receipt_stmt.where(RevenueReceipt.received_at<=date_to)
+        expense_stmt=expense_stmt.where(FinancialExpense.expense_date<=date_to)
+    received=(await db.execute(receipt_stmt)).scalar_one()
+    expenses=(await db.execute(expense_stmt)).scalar_one()
     received,expenses=money(received),money(expenses)
+    by_company:dict[str,dict[str,float]]={}
+    by_service:dict[str,dict[str,float]]={}
+    for row in items:
+        company=by_company.setdefault(row["company_name"],{"gross":0,"due":0,"received":0})
+        company["gross"]+=row["gross_business_amount"];company["due"]+=row["mfec_due_amount"];company["received"]+=row["received_amount"]
+        service=by_service.setdefault(row["service_type"],{"gross":0,"due":0})
+        service["gross"]+=row["gross_business_amount"];service["due"]+=row["mfec_due_amount"]
     return {"accrued_revenue":float(due),"actual_revenue":float(received),"expenses":float(expenses),
             "outstanding_receivable":float(max(due-received,Decimal("0"))),"estimated_profit":float(due-expenses),
-            "actual_net_result":float(received-expenses),"gross_business_amount":sum(x["gross_business_amount"] for x in items)}
+            "actual_net_result":float(received-expenses),"gross_business_amount":sum(x["gross_business_amount"] for x in items),
+            "by_company":[{"name":name,**values} for name,values in sorted(by_company.items(),key=lambda x:x[1]["due"],reverse=True)],
+            "by_service":[{"name":name,**values} for name,values in sorted(by_service.items(),key=lambda x:x[1]["due"],reverse=True)]}

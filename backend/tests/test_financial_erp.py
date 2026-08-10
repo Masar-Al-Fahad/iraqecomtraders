@@ -17,7 +17,7 @@ from models.panel_users import PanelUser  # noqa: F401
 from models.registrations import Registrations
 from routers.financial_erp import (
     AllocationIn, ReopenIn, SettlementIn, StatementBulkIn, StatementLineIn,
-    approve_statement, create_settlement, reopen_statement, save_statement_bulk,
+    approve_statement, create_settlement, list_account_items, reopen_statement, save_statement_bulk,
 )
 from schemas.auth import UserResponse
 from services.financial_erp import calculate_line, resolve_account_item_pricing, validate_and_add_allocation
@@ -78,6 +78,16 @@ async def test_override_priority_and_snapshot_approval(db):
         )
     assert exc.value.status_code==409
     await reopen_statement(result["statement_id"],ReopenIn(reason="تصحيح موثق"),user=user(**{"financial.monthly.reopen":True}),db=db)
+
+
+@pytest.mark.asyncio
+async def test_account_items_expose_effective_override_values(db):
+    _member,_company,account,_item,_link=await seed(db)
+    result=await list_account_items(account.id,_user=user(**{"financial.member_links.view":True}),db=db)
+    item=result["items"][0]
+    assert item["effective_unit_price"]==27000
+    assert item["effective_mfec_share_type"]=="fixed"
+    assert item["effective_mfec_share_value"]==2500
 
 
 @pytest.mark.asyncio

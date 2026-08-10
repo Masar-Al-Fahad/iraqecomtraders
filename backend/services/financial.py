@@ -128,3 +128,48 @@ def build_financial_xlsx(rows: Iterable[dict], title: str, filters_label: str) -
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def build_erp_xlsx(rows: Iterable[dict], columns: list[tuple[str, str]], title: str, period: str) -> bytes:
+    """Build a branded, real XLSX for arbitrary ERP ledgers."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    rows = list(rows)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31]
+    ws.sheet_view.rightToLeft = True
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columns))
+    ws["A1"] = f"تجمع تجار التجارة الإلكترونية في العراق (MFEC) — {title}"
+    ws["A1"].font = Font(name="Arial", bold=True, size=15, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="1F2937")
+    ws["A1"].alignment = Alignment(horizontal="center", readingOrder=2)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(columns))
+    ws["A2"] = period
+    ws["A2"].alignment = Alignment(horizontal="center", readingOrder=2)
+    thin = Side(style="thin", color="D1D5DB")
+    for index, (_, label) in enumerate(columns, 1):
+        cell = ws.cell(4, index, label)
+        cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="C89B3C")
+        cell.alignment = Alignment(horizontal="center", readingOrder=2)
+        cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for ridx, row in enumerate(rows, 5):
+        for cidx, (key, _) in enumerate(columns, 1):
+            value = row.get(key, "")
+            cell = ws.cell(ridx, cidx, float(value) if isinstance(value, Decimal) else value)
+            cell.alignment = Alignment(horizontal="center", readingOrder=2)
+            cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for index, (_, label) in enumerate(columns, 1):
+        longest = max([len(str(label)), *[len(str(row.get(columns[index-1][0], ""))) for row in rows]], default=12)
+        ws.column_dimensions[get_column_letter(index)].width = min(max(longest + 3, 12), 36)
+    ws.freeze_panes = "A5"
+    ws.auto_filter.ref = f"A4:{get_column_letter(len(columns))}{max(4, 4 + len(rows))}"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.oddFooter.center.text = "MFEC | صفحة &P من &N"
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()

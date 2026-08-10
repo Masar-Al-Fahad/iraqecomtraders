@@ -263,13 +263,17 @@ async def financial_access(
         "manage_member_company_accounts", "enter_expenses", "view_expenses",
         *FINANCIAL_VIEW_PERMS, "issue_distinguished_certificate",
         "financial.dashboard.view", "financial.companies.view", "financial.companies.create",
-        "financial.companies.edit", "financial.contracts.manage", "financial.pricing.manage",
-        "financial.member_links.view", "financial.member_links.create", "financial.member_links.edit",
+        "financial.companies.edit", "financial.companies.delete", "financial.contracts.manage", "financial.pricing.manage",
+        "financial.member_links.view", "financial.member_links.create", "financial.member_links.edit", "financial.member_links.delete",
         "financial.annexes.manage",
-        "financial.monthly.view", "financial.monthly.enter", "financial.monthly.approve",
-        "financial.expenses.view", "financial.expenses.create", "financial.revenues.view",
-        "financial.revenues.create", "financial.settlements.view", "financial.settlements.create",
-        "financial.reports.view", "financial.audit.view", "financial.certificates.issue",
+        "financial.monthly.view", "financial.monthly.enter", "financial.monthly.edit",
+        "financial.monthly.approve", "financial.monthly.reopen",
+        "financial.expenses.view", "financial.expenses.create", "financial.expenses.edit",
+        "financial.expenses.delete", "financial.expenses.restore", "financial.revenues.view",
+        "financial.revenues.create", "financial.revenues.edit", "financial.revenues.delete",
+        "financial.revenues.restore", "financial.settlements.view", "financial.settlements.create",
+        "financial.settlements.reverse", "financial.reports.view", "financial.reports.pdf",
+        "financial.reports.xlsx", "financial.reports.print", "financial.audit.view", "financial.certificates.issue",
     )),
 ):
     return {
@@ -368,7 +372,7 @@ async def list_companies(
 @router.post("/companies")
 async def create_company(
     data: CompanyIn,
-    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.companies.edit")),
+    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.companies.create")),
     db: AsyncSession = Depends(get_db),
 ):
     actor = await resolve_actor_name(db, user)
@@ -402,7 +406,7 @@ async def create_company(
 async def update_company(
     company_id: int,
     data: CompanyIn,
-    user: UserResponse = Depends(require_permission("manage_companies_contracts")),
+    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.companies.edit")),
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(FinancialCompany, company_id)
@@ -495,7 +499,7 @@ async def list_member_accounts(
     return {"items": [
         {
             "id": a.id, "member_id": m.id, "member_name": m.merchant_name,
-            "membership_number": m.membership_number, "governorate": m.governorate,
+            "business_name": m.business_name, "membership_number": m.membership_number, "governorate": m.governorate,
             "membership_status": m.membership_status, "company_id": c.id, "company_name": c.name,
             "service_type_name": s.name, "registered_name": a.registered_name,
             "registered_phone": a.registered_phone, "customer_code": a.customer_code,
@@ -513,14 +517,16 @@ async def member_options(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(
-        Registrations.id, Registrations.merchant_name, Registrations.membership_number, Registrations.governorate
+        Registrations.id, Registrations.merchant_name, Registrations.membership_number,
+        Registrations.governorate, Registrations.business_name
     ).where(Registrations.status == "approved").order_by(Registrations.merchant_name).limit(200)
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where(or_(Registrations.merchant_name.ilike(term), Registrations.membership_number.ilike(term)))
     rows = (await db.execute(stmt)).all()
     return {"items": [
-        {"id": x[0], "member_name": x[1], "membership_number": x[2], "governorate": x[3]} for x in rows
+        {"id": x[0], "member_name": x[1], "membership_number": x[2],
+         "governorate": x[3], "business_name": x[4]} for x in rows
     ]}
 
 
@@ -542,6 +548,7 @@ async def upsert_member_account(
     actor = await resolve_actor_name(db, user)
     payload = data.model_dump()
     payload["statement_url"] = str(data.statement_url) if data.statement_url else None
+    payload["customer_portal_url"] = str(data.customer_portal_url) if data.customer_portal_url else None
     old = None
     if item:
         old = {k: getattr(item, k) for k in payload}
@@ -739,6 +746,8 @@ async def change_period_status(
 async def list_expenses(
     accounting_year: Optional[int] = None,
     accounting_month: Optional[int] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     include_deleted: bool = False,
     _user: UserResponse = Depends(require_any_permission("view_expenses", "financial.expenses.view")),
     db: AsyncSession = Depends(get_db),
@@ -748,6 +757,10 @@ async def list_expenses(
         stmt = stmt.where(FinancialExpense.accounting_year == accounting_year)
     if accounting_month:
         stmt = stmt.where(FinancialExpense.accounting_month == accounting_month)
+    if date_from:
+        stmt = stmt.where(FinancialExpense.expense_date >= date_from)
+    if date_to:
+        stmt = stmt.where(FinancialExpense.expense_date <= date_to)
     if not include_deleted:
         stmt = stmt.where(FinancialExpense.deleted_at.is_(None))
     rows = (await db.execute(stmt)).scalars().all()
@@ -1077,7 +1090,10 @@ async def upload_private_document(
     kind: Literal["contracts", "price-lists", "annexes", "statements", "settlements", "receipts", "certificates"],
     file: UploadFile = File(...),
     user: UserResponse = Depends(require_any_permission(
-        "manage_companies_contracts", "enter_expenses", "issue_distinguished_certificate"
+        "manage_companies_contracts", "enter_expenses", "issue_distinguished_certificate",
+        "financial.contracts.manage", "financial.annexes.manage", "financial.monthly.enter",
+        "financial.monthly.edit", "financial.settlements.create", "financial.revenues.create",
+        "financial.revenues.edit", "financial.expenses.create", "financial.expenses.edit",
     )),
 ):
     allowed = {
@@ -1113,6 +1129,9 @@ async def download_private_document(
     _user: UserResponse = Depends(require_any_permission(
         "view_companies", "manage_companies_contracts", "view_expenses",
         "enter_expenses", "print_pdf", "issue_distinguished_certificate",
+        "financial.companies.view", "financial.contracts.manage", "financial.member_links.view",
+        "financial.annexes.manage", "financial.monthly.view", "financial.settlements.view",
+        "financial.revenues.view", "financial.expenses.view", "financial.reports.view",
     )),
 ):
     if not object_key.startswith("financial/") or ".." in object_key:
