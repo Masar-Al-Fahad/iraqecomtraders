@@ -209,6 +209,10 @@ async def add_company_attachment(
     if not await db.get(FinancialCompany,company_id): raise HTTPException(404,"الشركة غير موجودة")
     if not data.object_key.startswith("financial/"): raise HTTPException(400,"مسار المستند غير صالح")
     actor=await resolve_actor_name(db,user)
+    if data.replaced_id:
+        replaced=await db.get(CompanyAttachment,data.replaced_id)
+        if not replaced or replaced.company_id!=company_id:raise HTTPException(409,"المرفق المستبدل لا يتبع الشركة")
+        replaced.deleted_at=datetime.now();replaced.deleted_by=actor
     row=CompanyAttachment(company_id=company_id,contract_id=data.contract_id,document_type=data.document_type,
         object_key=data.object_key,original_filename=data.original_filename,mime_type=data.mime_type,
         size_bytes=data.size_bytes,uploaded_by=actor,replaced_attachment_id=data.replaced_id)
@@ -358,6 +362,10 @@ async def add_annex(
     if not await db.get(MemberCompanyAccount,account_id):raise HTTPException(404,"ارتباط العضو غير موجود")
     if not data.object_key.startswith("financial/"):raise HTTPException(400,"مسار المستند غير صالح")
     actor=await resolve_actor_name(db,user)
+    if data.replaced_id:
+        replaced=await db.get(MemberAnnex,data.replaced_id)
+        if not replaced or replaced.account_id!=account_id:raise HTTPException(409,"الملحق المستبدل لا يتبع الارتباط")
+        replaced.deleted_at=datetime.now();replaced.deleted_by=actor
     row=MemberAnnex(account_id=account_id,object_key=data.object_key,original_filename=data.original_filename,
         mime_type=data.mime_type,size_bytes=data.size_bytes,signed_at=data.signed_at,uploaded_by=actor,replaced_annex_id=data.replaced_id)
     db.add(row);await db.flush()
