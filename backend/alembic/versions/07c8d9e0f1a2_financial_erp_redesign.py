@@ -3,6 +3,8 @@
 Revision ID: 07c8d9e0f1a2
 Revises: f6a7b8c9d0e1
 """
+import re
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -10,6 +12,247 @@ revision = "07c8d9e0f1a2"
 down_revision = "f6a7b8c9d0e1"
 branch_labels = None
 depends_on = None
+
+
+def _inspector():
+    # Inspect afresh after every DDL operation; PostgreSQL Inspector instances
+    # cache table/column/constraint metadata.
+    return sa.inspect(op.get_bind())
+
+
+def _incompatible(object_name, detail):
+    raise RuntimeError(
+        f"Migration {revision} found incompatible {object_name}: {detail}. "
+        "No data was changed for this object. Reconcile the schema manually "
+        "and rerun `alembic upgrade head`."
+    )
+
+
+def _type_signature(column_type):
+    if isinstance(column_type, sa.String):
+        return ("string", column_type.length)
+    if isinstance(column_type, sa.Text):
+        return ("text",)
+    if isinstance(column_type, sa.Numeric):
+        return ("numeric", column_type.precision, column_type.scale)
+    if isinstance(column_type, sa.DateTime):
+        return ("datetime", bool(column_type.timezone))
+    if isinstance(column_type, sa.Date):
+        return ("date",)
+    if isinstance(column_type, sa.Boolean):
+        return ("boolean",)
+    if isinstance(column_type, sa.Integer):
+        return ("integer",)
+    return (column_type.__class__.__name__.lower(),)
+
+
+def _ensure_column(table_name, column):
+    inspector = _inspector()
+    if table_name not in inspector.get_table_names():
+        _incompatible(f"table {table_name!r}", "required parent table is missing")
+
+    existing = {item["name"]: item for item in inspector.get_columns(table_name)}
+    current = existing.get(column.name)
+    if current is None:
+        if not column.nullable and column.server_default is None:
+            quoted = op.get_bind().dialect.identifier_preparer.quote(table_name)
+            has_rows = op.get_bind().execute(
+                sa.text(f"SELECT EXISTS (SELECT 1 FROM {quoted} LIMIT 1)")
+            ).scalar()
+            if has_rows:
+                _incompatible(
+                    f"column {table_name}.{column.name}",
+                    "it is required and has no default, but the partial table contains rows",
+                )
+        op.add_column(table_name, column)
+        return
+
+    expected_type = _type_signature(column.type)
+    actual_type = _type_signature(current["type"])
+    if actual_type != expected_type:
+        _incompatible(
+            f"column {table_name}.{column.name}",
+            f"expected type {expected_type}, found {actual_type}",
+        )
+    if not column.nullable and current.get("nullable", True):
+        _incompatible(
+            f"column {table_name}.{column.name}",
+            "expected NOT NULL, found nullable",
+        )
+
+
+def _constraint_columns(constraint):
+    return tuple(constraint.get("column_names") or constraint.get("constrained_columns") or ())
+
+
+def _declared_constraint_columns(constraint):
+    columns = list(constraint.columns)
+    if not columns:
+        columns = list(getattr(constraint, "_pending_colargs", ()))
+    return [column if isinstance(column, str) else column.name for column in columns]
+
+
+def _ensure_primary_key(table_name, columns):
+    existing = _inspector().get_pk_constraint(table_name)
+    actual = _constraint_columns(existing)
+    expected = tuple(columns)
+    if actual == expected:
+        return
+    if actual:
+        _incompatible(
+            f"primary key on {table_name}",
+            f"expected columns {expected}, found {actual}",
+        )
+    op.create_primary_key(f"pk_{table_name}", table_name, list(expected))
+
+
+def _ensure_unique(table_name, columns, name=None):
+    expected = tuple(columns)
+    constraints = _inspector().get_unique_constraints(table_name)
+    if name:
+        named = next((item for item in constraints if item.get("name") == name), None)
+        if named:
+            actual = _constraint_columns(named)
+            if actual != expected:
+                _incompatible(
+                    f"unique constraint {name!r}",
+                    f"expected columns {expected}, found {actual}",
+                )
+            return
+    if any(_constraint_columns(item) == expected for item in constraints):
+        return
+    op.create_unique_constraint(name or f"uq_{table_name}_{'_'.join(expected)}", table_name, list(expected))
+
+
+def _normalize_sql(value):
+    return "".join((value or "").lower().replace('"', "").split()).strip("()")
+
+
+def _check_sql_compatible(expected, actual):
+    expected_normalized = _normalize_sql(expected)
+    actual_normalized = _normalize_sql(actual)
+    if actual_normalized == expected_normalized:
+        return True
+
+    # PostgreSQL canonicalizes IN checks to "= ANY (ARRAY[...])" and adds
+    # casts. Verify the complete value set instead of requiring identical text.
+    if "mfec_share_type" in expected_normalized:
+        return (
+            "mfec_share_type" in actual_normalized
+            and set(re.findall(r"'([^']*)'", actual_normalized))
+            == {"fixed", "percentage"}
+            and not any(
+                marker in actual_normalized
+                for marker in ("<", ">", "!=", "<>", "notin", "not(")
+            )
+        )
+
+    # PostgreSQL preserves these four predicates while adding parentheses and
+    # casts to the reflected XOR-style allocation check.
+    allocation_predicates = (
+        "statement_idisnotnull",
+        "settlement_batch_idisnull",
+        "statement_idisnull",
+        "settlement_batch_idisnotnull",
+    )
+    if all(predicate in expected_normalized for predicate in allocation_predicates):
+        return all(predicate in actual_normalized for predicate in allocation_predicates)
+    return False
+
+
+def _ensure_check(table_name, sqltext, name):
+    expected = str(sqltext)
+    constraints = _inspector().get_check_constraints(table_name)
+    named = next((item for item in constraints if item.get("name") == name), None)
+    if named:
+        if not _check_sql_compatible(expected, named.get("sqltext")):
+            _incompatible(
+                f"check constraint {name!r}",
+                f"expected {sqltext!s}, found {named.get('sqltext')!s}",
+            )
+        return
+    if any(_check_sql_compatible(expected, item.get("sqltext")) for item in constraints):
+        return
+    op.create_check_constraint(name, table_name, sqltext)
+
+
+def _ensure_foreign_key(table_name, local_column, foreign_key):
+    target = foreign_key.target_fullname.split(".")
+    referred_table, referred_column = target[-2], target[-1]
+    expected_local = (local_column,)
+    expected_remote = (referred_column,)
+    expected_delete = (foreign_key.ondelete or "").upper() or None
+    for item in _inspector().get_foreign_keys(table_name):
+        if _constraint_columns(item) != expected_local:
+            continue
+        actual_table = item.get("referred_table")
+        actual_remote = tuple(item.get("referred_columns") or ())
+        actual_delete = ((item.get("options") or {}).get("ondelete") or "").upper() or None
+        if (
+            actual_table == referred_table
+            and actual_remote == expected_remote
+            and actual_delete == expected_delete
+        ):
+            return
+        _incompatible(
+            f"foreign key on {table_name}.{local_column}",
+            "expected "
+            f"{referred_table}.{referred_column} ON DELETE {expected_delete or 'NO ACTION'}, "
+            f"found {actual_table}.{','.join(actual_remote)} "
+            f"ON DELETE {actual_delete or 'NO ACTION'}",
+        )
+    op.create_foreign_key(
+        f"fk_{table_name}_{local_column}_{referred_table}",
+        table_name,
+        referred_table,
+        [local_column],
+        [referred_column],
+        ondelete=foreign_key.ondelete,
+    )
+
+
+def _ensure_table(table_name, *elements):
+    inspector = _inspector()
+    if table_name not in inspector.get_table_names():
+        op.create_table(table_name, *elements)
+        return
+
+    columns = [item for item in elements if isinstance(item, sa.Column)]
+    for column in columns:
+        _ensure_column(table_name, column)
+
+    primary_columns = [column.name for column in columns if column.primary_key]
+    if primary_columns:
+        _ensure_primary_key(table_name, primary_columns)
+
+    for constraint in (item for item in elements if isinstance(item, sa.UniqueConstraint)):
+        _ensure_unique(table_name, _declared_constraint_columns(constraint), constraint.name)
+    for column in columns:
+        if column.unique:
+            _ensure_unique(table_name, [column.name])
+
+    for constraint in (item for item in elements if isinstance(item, sa.CheckConstraint)):
+        _ensure_check(table_name, constraint.sqltext, constraint.name)
+
+    for column in columns:
+        for foreign_key in column.foreign_keys:
+            _ensure_foreign_key(table_name, column.name, foreign_key)
+
+
+def _ensure_index(name, table_name, columns, unique=False):
+    indexes = _inspector().get_indexes(table_name)
+    existing = next((item for item in indexes if item.get("name") == name), None)
+    expected = tuple(columns)
+    if existing:
+        actual = tuple(existing.get("column_names") or ())
+        if actual != expected or bool(existing.get("unique")) != bool(unique):
+            _incompatible(
+                f"index {name!r}",
+                f"expected columns {expected} unique={unique}, "
+                f"found columns {actual} unique={bool(existing.get('unique'))}",
+            )
+        return
+    op.create_index(name, table_name, list(columns), unique=unique)
 
 
 def _audit_columns():
@@ -42,9 +285,9 @@ def upgrade():
         ("financial_expenses", sa.Column("restored_at", sa.DateTime(timezone=True))),
         ("financial_expenses", sa.Column("restored_by", sa.String(200))),
     ):
-        op.add_column(name, column)
+        _ensure_column(name, column)
 
-    op.create_table(
+    _ensure_table(
         "financial_company_attachments",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("company_id", sa.Integer(), sa.ForeignKey("financial_companies.id", ondelete="CASCADE"), nullable=False),
@@ -59,9 +302,9 @@ def upgrade():
         sa.Column("replaced_attachment_id", sa.Integer(), sa.ForeignKey("financial_company_attachments.id", ondelete="SET NULL")),
         *_audit_columns(),
     )
-    op.create_index("ix_fin_company_attachment_company", "financial_company_attachments", ["company_id", "deleted_at"])
+    _ensure_index("ix_fin_company_attachment_company", "financial_company_attachments", ["company_id", "deleted_at"])
 
-    op.create_table(
+    _ensure_table(
         "financial_pricing_items",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("company_id", sa.Integer(), sa.ForeignKey("financial_companies.id", ondelete="CASCADE"), nullable=False),
@@ -73,8 +316,8 @@ def upgrade():
         *_audit_columns(),
         sa.UniqueConstraint("company_id", "name", name="uq_fin_pricing_item_company_name"),
     )
-    op.create_index("ix_fin_pricing_item_company_active", "financial_pricing_items", ["company_id", "is_active"])
-    op.create_table(
+    _ensure_index("ix_fin_pricing_item_company_active", "financial_pricing_items", ["company_id", "is_active"])
+    _ensure_table(
         "financial_pricing_item_versions",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("pricing_item_id", sa.Integer(), sa.ForeignKey("financial_pricing_items.id", ondelete="CASCADE"), nullable=False),
@@ -90,8 +333,8 @@ def upgrade():
         sa.CheckConstraint("mfec_share_type IN ('fixed','percentage')", name="ck_fin_pricing_share_type"),
         sa.UniqueConstraint("pricing_item_id", "version", name="uq_fin_pricing_item_version"),
     )
-    op.create_index("ix_fin_pricing_version_effective", "financial_pricing_item_versions", ["pricing_item_id", "effective_from", "effective_to"])
-    op.create_table(
+    _ensure_index("ix_fin_pricing_version_effective", "financial_pricing_item_versions", ["pricing_item_id", "effective_from", "effective_to"])
+    _ensure_table(
         "financial_member_account_items",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("account_id", sa.Integer(), sa.ForeignKey("financial_member_company_accounts.id", ondelete="CASCADE"), nullable=False),
@@ -104,11 +347,11 @@ def upgrade():
         sa.Column("notes", sa.Text()),
         sa.UniqueConstraint("account_id", "pricing_item_id", name="uq_fin_member_account_item"),
     )
-    op.create_index("ix_fin_member_account_item_active", "financial_member_account_items", ["account_id", "is_active"])
-    op.create_index("ix_fin_member_account_item_pricing", "financial_member_account_items", ["pricing_item_id"])
+    _ensure_index("ix_fin_member_account_item_active", "financial_member_account_items", ["account_id", "is_active"])
+    _ensure_index("ix_fin_member_account_item_pricing", "financial_member_account_items", ["pricing_item_id"])
 
     def document_table(name, owner, fk, extra=()):
-        op.create_table(
+        _ensure_table(
             name, sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column(owner, sa.Integer(), sa.ForeignKey(fk, ondelete="CASCADE"), nullable=False),
             sa.Column("object_key", sa.String(500), nullable=False),
@@ -124,9 +367,9 @@ def upgrade():
         sa.Column("signed_at", sa.Date()),
         sa.Column("replaced_annex_id", sa.Integer(), sa.ForeignKey("financial_member_annexes.id", ondelete="SET NULL")),
     ))
-    op.create_index("ix_fin_member_annex_account", "financial_member_annexes", ["account_id", "deleted_at"])
+    _ensure_index("ix_fin_member_annex_account", "financial_member_annexes", ["account_id", "deleted_at"])
 
-    op.create_table(
+    _ensure_table(
         "financial_monthly_statements",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("company_id", sa.Integer(), sa.ForeignKey("financial_companies.id", ondelete="RESTRICT"), nullable=False),
@@ -140,13 +383,13 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("company_id", "accounting_year", "accounting_month", name="uq_fin_statement_company_month"),
     )
-    op.create_index("ix_fin_statement_company_period", "financial_monthly_statements", ["company_id", "accounting_year", "accounting_month", "status"])
-    op.create_index("ix_fin_statement_dates", "financial_monthly_statements", ["period_start", "period_end"])
+    _ensure_index("ix_fin_statement_company_period", "financial_monthly_statements", ["company_id", "accounting_year", "accounting_month", "status"])
+    _ensure_index("ix_fin_statement_dates", "financial_monthly_statements", ["period_start", "period_end"])
     document_table("financial_statement_attachments", "statement_id", "financial_monthly_statements.id", (
         sa.Column("replaced_attachment_id", sa.Integer(), sa.ForeignKey("financial_statement_attachments.id", ondelete="SET NULL")),
     ))
 
-    op.create_table(
+    _ensure_table(
         "financial_monthly_entry_lines",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("statement_id", sa.Integer(), sa.ForeignKey("financial_monthly_statements.id", ondelete="CASCADE"), nullable=False),
@@ -167,11 +410,11 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.UniqueConstraint("statement_id", "member_company_account_id", "pricing_item_id", name="uq_fin_statement_account_item"),
     )
-    op.create_index("ix_fin_entry_statement_status", "financial_monthly_entry_lines", ["statement_id", "settlement_status"])
-    op.create_index("ix_fin_entry_member", "financial_monthly_entry_lines", ["member_id"])
-    op.create_index("ix_fin_entry_pricing", "financial_monthly_entry_lines", ["pricing_item_id"])
+    _ensure_index("ix_fin_entry_statement_status", "financial_monthly_entry_lines", ["statement_id", "settlement_status"])
+    _ensure_index("ix_fin_entry_member", "financial_monthly_entry_lines", ["member_id"])
+    _ensure_index("ix_fin_entry_pricing", "financial_monthly_entry_lines", ["pricing_item_id"])
 
-    op.create_table(
+    _ensure_table(
         "financial_settlement_batches",
         sa.Column("id", sa.Integer(), primary_key=True), sa.Column("batch_number", sa.String(40), nullable=False, unique=True),
         sa.Column("company_id", sa.Integer(), sa.ForeignKey("financial_companies.id", ondelete="RESTRICT"), nullable=False),
@@ -180,8 +423,8 @@ def upgrade():
         sa.Column("status", sa.String(20), nullable=False, server_default="active"),
         sa.Column("created_by", sa.String(200), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
-    op.create_index("ix_fin_settlement_company_date", "financial_settlement_batches", ["company_id", "settled_at", "status"])
-    op.create_table(
+    _ensure_index("ix_fin_settlement_company_date", "financial_settlement_batches", ["company_id", "settled_at", "status"])
+    _ensure_table(
         "financial_settlement_lines",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("batch_id", sa.Integer(), sa.ForeignKey("financial_settlement_batches.id", ondelete="RESTRICT"), nullable=False),
@@ -189,14 +432,14 @@ def upgrade():
         sa.Column("amount_snapshot", sa.Numeric(18, 3), nullable=False),
         sa.UniqueConstraint("batch_id", "entry_line_id", name="uq_fin_settlement_batch_line"),
     )
-    op.create_table(
+    _ensure_table(
         "financial_settlement_reversals",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("batch_id", sa.Integer(), sa.ForeignKey("financial_settlement_batches.id", ondelete="RESTRICT"), nullable=False),
         sa.Column("reason", sa.Text(), nullable=False), sa.Column("reversed_by", sa.String(200), nullable=False),
         sa.Column("reversed_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
-    op.create_table(
+    _ensure_table(
         "financial_revenue_receipts",
         sa.Column("id", sa.Integer(), primary_key=True), sa.Column("receipt_number", sa.String(80), nullable=False, unique=True),
         sa.Column("company_id", sa.Integer(), sa.ForeignKey("financial_companies.id", ondelete="RESTRICT"), nullable=False),
@@ -210,8 +453,8 @@ def upgrade():
         sa.Column("deleted_at", sa.DateTime(timezone=True)), sa.Column("deleted_by", sa.String(200)),
         sa.Column("restored_at", sa.DateTime(timezone=True)), sa.Column("restored_by", sa.String(200)),
     )
-    op.create_index("ix_fin_receipt_company_date", "financial_revenue_receipts", ["company_id", "received_at", "deleted_at"])
-    op.create_table(
+    _ensure_index("ix_fin_receipt_company_date", "financial_revenue_receipts", ["company_id", "received_at", "deleted_at"])
+    _ensure_table(
         "financial_receipt_allocations",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("receipt_id", sa.Integer(), sa.ForeignKey("financial_revenue_receipts.id", ondelete="RESTRICT"), nullable=False),
@@ -225,7 +468,7 @@ def upgrade():
             name="ck_fin_allocation_one_target",
         ),
     )
-    op.create_index("ix_fin_allocation_receipt", "financial_receipt_allocations", ["receipt_id"])
+    _ensure_index("ix_fin_allocation_receipt", "financial_receipt_allocations", ["receipt_id"])
 
     # Safe legacy bridge: one default pricing item/version per existing company.
     op.execute("""
