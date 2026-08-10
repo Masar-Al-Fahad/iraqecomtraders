@@ -12,6 +12,7 @@ export const ROUTES = {
   ADMIN_FORM_SETTINGS: `${APP_BASE}/admin/form-settings`,
   ADMIN_MEMBERSHIP_REPORT: `${APP_BASE}/admin/membership-report`,
   ADMIN_FINANCIAL: `${APP_BASE}/admin/financial`,
+  ADMIN_FINANCIAL_LEGACY: `${APP_BASE}/admin/financial/legacy`,
 } as const;
 
 /** Map legacy `/admin...` pathname (+ search/hash) to canonical admin path. */

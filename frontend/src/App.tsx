@@ -15,6 +15,7 @@ import BrandSettings from './pages/BrandSettings';
 import FormSettings from './pages/FormSettings';
 import MembershipReport from './pages/MembershipReport';
 import FinancialActivities from './pages/FinancialActivities';
+import FinancialErp from './pages/financial/FinancialErp';
 // MODULE_IMPORTS_START
 // MODULE_IMPORTS_END
 
@@ -42,7 +43,9 @@ const AppRoutes = () => (
     <Route path={ROUTES.ADMIN_BRAND_SETTINGS} element={<BrandSettings />} />
     <Route path={ROUTES.ADMIN_FORM_SETTINGS} element={<FormSettings />} />
     <Route path={ROUTES.ADMIN_MEMBERSHIP_REPORT} element={<MembershipReport />} />
-    <Route path={ROUTES.ADMIN_FINANCIAL} element={<FinancialActivities />} />
+    <Route path={ROUTES.ADMIN_FINANCIAL} element={<FinancialErp />} />
+    <Route path={`${ROUTES.ADMIN_FINANCIAL}/*`} element={<FinancialErp />} />
+    <Route path={ROUTES.ADMIN_FINANCIAL_LEGACY} element={<FinancialActivities />} />
     <Route path="/auth/callback" element={<AuthCallback />} />
     <Route path="/auth/error" element={<AuthError />} />
 

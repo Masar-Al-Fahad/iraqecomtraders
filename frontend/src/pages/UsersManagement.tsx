@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 interface Permissions {
+  [key: string]: boolean;
   view: boolean;
   add: boolean;
   edit: boolean;
@@ -44,6 +45,30 @@ interface Permissions {
   view_audit_log: boolean;
   manage_periods: boolean;
 }
+
+const financialPermissionLabels = [
+  ['financial.dashboard.view', 'المؤشرات المالية: مشاهدة'],
+  ['financial.companies.view', 'الشركات: مشاهدة'], ['financial.companies.create', 'الشركات: إضافة'],
+  ['financial.companies.edit', 'الشركات: تعديل'], ['financial.companies.delete', 'الشركات: حذف'],
+  ['financial.contracts.manage', 'إدارة العقود'], ['financial.pricing.manage', 'إدارة الأسعار'],
+  ['financial.member_links.view', 'الارتباطات: مشاهدة'], ['financial.member_links.create', 'الارتباطات: إضافة'],
+  ['financial.member_links.edit', 'الارتباطات: تعديل'], ['financial.member_links.delete', 'الارتباطات: حذف'],
+  ['financial.annexes.manage', 'إدارة ملحقات العقود'],
+  ['financial.monthly.view', 'الإدخال الشهري: مشاهدة'], ['financial.monthly.enter', 'الإدخال الشهري: إدخال'],
+  ['financial.monthly.edit', 'الإدخال الشهري: تعديل'], ['financial.monthly.approve', 'الإدخال الشهري: اعتماد'],
+  ['financial.monthly.reopen', 'إعادة فتح كشف معتمد'],
+  ['financial.expenses.view', 'المصاريف: مشاهدة'], ['financial.expenses.create', 'المصاريف: إضافة'],
+  ['financial.expenses.edit', 'المصاريف: تعديل'], ['financial.expenses.delete', 'المصاريف: حذف'],
+  ['financial.expenses.restore', 'المصاريف: استعادة'],
+  ['financial.revenues.view', 'الإيرادات: مشاهدة'], ['financial.revenues.create', 'الإيرادات: إضافة'],
+  ['financial.revenues.edit', 'الإيرادات: تعديل/تخصيص'], ['financial.revenues.delete', 'الإيرادات: حذف'],
+  ['financial.revenues.restore', 'الإيرادات: استعادة'],
+  ['financial.settlements.view', 'التسويات: مشاهدة'], ['financial.settlements.create', 'التسويات: اعتماد'],
+  ['financial.settlements.reverse', 'التسويات: عكس'],
+  ['financial.reports.view', 'التقارير: مشاهدة'], ['financial.reports.pdf', 'التقارير: PDF'],
+  ['financial.reports.xlsx', 'التقارير: Excel'], ['financial.reports.print', 'التقارير: طباعة'],
+  ['financial.audit.view', 'سجل التدقيق المالي'], ['financial.certificates.issue', 'إصدار الشهادات'],
+] as const;
 
 interface PanelUser {
   id: number;
@@ -80,6 +105,7 @@ const emptyPermissions = (): Permissions => ({
   issue_distinguished_certificate: false,
   view_audit_log: false,
   manage_periods: false,
+  ...Object.fromEntries(financialPermissionLabels.map(([key]) => [key, false])),
 });
 
 const permissionLabels: { key: keyof Permissions; label: string }[] = [
@@ -108,6 +134,7 @@ const permissionLabels: { key: keyof Permissions; label: string }[] = [
   { key: 'issue_distinguished_certificate', label: 'شهادة العضو المميز' },
   { key: 'view_audit_log', label: 'سجل العمليات' },
   { key: 'manage_periods', label: 'اعتماد وإعادة فتح الأشهر' },
+  ...financialPermissionLabels.map(([key, label]) => ({ key, label })),
 ];
 
 export default function UsersManagement() {
