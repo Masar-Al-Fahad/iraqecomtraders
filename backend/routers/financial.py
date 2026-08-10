@@ -47,6 +47,10 @@ FINANCIAL_VIEW_PERMS = (
     "view_profits",
     "view_financial_reports",
     "view_statements",
+    "financial.dashboard.view",
+    "financial.reports.view",
+    "financial.revenues.view",
+    "financial.settlements.view",
 )
 
 
@@ -81,6 +85,11 @@ class CompanyIn(BaseModel):
     contract_start: Optional[date] = None
     contract_end: Optional[date] = None
     notes: Optional[str] = None
+    owner_name: Optional[str] = None
+    address: Optional[str] = None
+    mobile: Optional[str] = None
+    cooperation_status: Literal["active", "suspended", "ended"] = "active"
+    cooperation_started_at: Optional[date] = None
 
 
 class ContractIn(BaseModel):
@@ -100,6 +109,13 @@ class AccountIn(BaseModel):
     registered_phone: Optional[str] = None
     customer_code: Optional[str] = None
     statement_url: Optional[HttpUrl] = None
+    customer_portal_url: Optional[HttpUrl] = None
+    started_at: Optional[date] = None
+    ended_at: Optional[date] = None
+    status: Literal["active", "inactive", "suspended"] = "active"
+    default_unit_price_override: Optional[Decimal] = Field(default=None, ge=0)
+    default_mfec_share_type_override: Literal["fixed", "percentage"] | None = None
+    default_mfec_share_value_override: Optional[Decimal] = Field(default=None, ge=0)
     notes: Optional[str] = None
     is_active: bool = True
 
@@ -246,6 +262,14 @@ async def financial_access(
         "monthly_entry", "view_companies", "manage_companies_contracts",
         "manage_member_company_accounts", "enter_expenses", "view_expenses",
         *FINANCIAL_VIEW_PERMS, "issue_distinguished_certificate",
+        "financial.dashboard.view", "financial.companies.view", "financial.companies.create",
+        "financial.companies.edit", "financial.contracts.manage", "financial.pricing.manage",
+        "financial.member_links.view", "financial.member_links.create", "financial.member_links.edit",
+        "financial.annexes.manage",
+        "financial.monthly.view", "financial.monthly.enter", "financial.monthly.approve",
+        "financial.expenses.view", "financial.expenses.create", "financial.revenues.view",
+        "financial.revenues.create", "financial.settlements.view", "financial.settlements.create",
+        "financial.reports.view", "financial.audit.view", "financial.certificates.issue",
     )),
 ):
     return {
@@ -256,7 +280,11 @@ async def financial_access(
 
 @router.get("/service-types")
 async def list_service_types(
-    _user: UserResponse = Depends(require_any_permission("monthly_entry", "view_companies", "manage_companies_contracts")),
+    _user: UserResponse = Depends(require_any_permission(
+        "monthly_entry", "view_companies", "manage_companies_contracts",
+        "financial.monthly.view", "financial.monthly.enter", "financial.companies.view",
+        "financial.pricing.manage", "financial.member_links.view",
+    )),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.execute(select(ServiceType).order_by(ServiceType.name))).scalars().all()
@@ -273,7 +301,7 @@ async def list_service_types(
 @router.post("/service-types")
 async def create_service_type(
     data: ServiceTypeIn,
-    user: UserResponse = Depends(require_permission("manage_companies_contracts")),
+    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.companies.create")),
     db: AsyncSession = Depends(get_db),
 ):
     if data.default_commission_method and data.default_commission_method not in COMMISSION_METHODS:
@@ -291,7 +319,11 @@ async def create_service_type(
 async def list_companies(
     service_type_id: Optional[int] = None,
     status: Optional[str] = None,
-    user: UserResponse = Depends(require_any_permission("monthly_entry", "view_companies", "manage_companies_contracts", "manage_member_company_accounts")),
+    user: UserResponse = Depends(require_any_permission(
+        "monthly_entry", "view_companies", "manage_companies_contracts", "manage_member_company_accounts",
+        "financial.monthly.view", "financial.monthly.enter", "financial.companies.view",
+        "financial.pricing.manage", "financial.member_links.view",
+    )),
     db: AsyncSession = Depends(get_db),
 ):
     latest = (
@@ -321,7 +353,9 @@ async def list_companies(
             "service_type_name": s.name, "service_type_code": s.code,
             "contact_info": c.contact_info, "status": c.status,
             "contract_start": _iso(c.contract_start), "contract_end": _iso(c.contract_end),
-            "notes": c.notes,
+            "notes": c.notes, "owner_name": c.owner_name, "address": c.address,
+            "mobile": c.mobile, "cooperation_status": c.cooperation_status,
+            "cooperation_started_at": _iso(c.cooperation_started_at),
             "current_contract": None if not ct or not show_contract else {
                 "id": ct.id, "version": ct.version, "commission_method": ct.commission_method,
                 "commission_value": float(ct.commission_value), "effective_from": _iso(ct.effective_from),
@@ -334,7 +368,7 @@ async def list_companies(
 @router.post("/companies")
 async def create_company(
     data: CompanyIn,
-    user: UserResponse = Depends(require_permission("manage_companies_contracts")),
+    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.companies.edit")),
     db: AsyncSession = Depends(get_db),
 ):
     actor = await resolve_actor_name(db, user)
@@ -386,7 +420,7 @@ async def update_company(
 @router.get("/companies/{company_id}/contracts")
 async def list_contracts(
     company_id: int,
-    _user: UserResponse = Depends(require_any_permission("view_companies", "manage_companies_contracts")),
+    _user: UserResponse = Depends(require_any_permission("view_companies", "manage_companies_contracts", "financial.companies.view", "financial.contracts.manage")),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.execute(
@@ -406,7 +440,7 @@ async def list_contracts(
 async def create_contract(
     company_id: int,
     data: ContractIn,
-    user: UserResponse = Depends(require_permission("manage_companies_contracts")),
+    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.contracts.manage")),
     db: AsyncSession = Depends(get_db),
 ):
     if data.commission_method not in COMMISSION_METHODS:
@@ -434,7 +468,10 @@ async def list_member_accounts(
     company_id: Optional[int] = None,
     member_id: Optional[int] = None,
     search: Optional[str] = None,
-    _user: UserResponse = Depends(require_any_permission("monthly_entry", "view_companies", "manage_member_company_accounts")),
+    _user: UserResponse = Depends(require_any_permission(
+        "monthly_entry", "view_companies", "manage_member_company_accounts",
+        "financial.monthly.view", "financial.member_links.view",
+    )),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
@@ -462,7 +499,9 @@ async def list_member_accounts(
             "membership_status": m.membership_status, "company_id": c.id, "company_name": c.name,
             "service_type_name": s.name, "registered_name": a.registered_name,
             "registered_phone": a.registered_phone, "customer_code": a.customer_code,
-            "statement_url": a.statement_url, "notes": a.notes, "is_active": a.is_active,
+            "statement_url": a.statement_url, "customer_portal_url": a.customer_portal_url or a.statement_url,
+            "started_at": _iso(a.started_at), "ended_at": _iso(a.ended_at), "status": a.status,
+            "notes": a.notes, "is_active": a.is_active,
         } for a, m, c, s in rows
     ]}
 
@@ -470,7 +509,7 @@ async def list_member_accounts(
 @router.get("/members")
 async def member_options(
     search: Optional[str] = None,
-    _user: UserResponse = Depends(require_permission("manage_member_company_accounts")),
+    _user: UserResponse = Depends(require_any_permission("manage_member_company_accounts", "financial.member_links.create", "financial.member_links.edit")),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(
@@ -488,7 +527,7 @@ async def member_options(
 @router.post("/member-accounts")
 async def upsert_member_account(
     data: AccountIn,
-    user: UserResponse = Depends(require_permission("manage_member_company_accounts")),
+    user: UserResponse = Depends(require_any_permission("manage_member_company_accounts", "financial.member_links.create", "financial.member_links.edit")),
     db: AsyncSession = Depends(get_db),
 ):
     if not await db.get(Registrations, data.member_id):
@@ -700,7 +739,8 @@ async def change_period_status(
 async def list_expenses(
     accounting_year: Optional[int] = None,
     accounting_month: Optional[int] = None,
-    _user: UserResponse = Depends(require_permission("view_expenses")),
+    include_deleted: bool = False,
+    _user: UserResponse = Depends(require_any_permission("view_expenses", "financial.expenses.view")),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(FinancialExpense).order_by(FinancialExpense.expense_date.desc())
@@ -708,6 +748,8 @@ async def list_expenses(
         stmt = stmt.where(FinancialExpense.accounting_year == accounting_year)
     if accounting_month:
         stmt = stmt.where(FinancialExpense.accounting_month == accounting_month)
+    if not include_deleted:
+        stmt = stmt.where(FinancialExpense.deleted_at.is_(None))
     rows = (await db.execute(stmt)).scalars().all()
     return {"items": [
         {
@@ -715,6 +757,7 @@ async def list_expenses(
             "accounting_month": x.accounting_month, "category": x.category,
             "description": x.description, "amount": float(x.amount), "notes": x.notes,
             "receipt_key": x.receipt_key, "created_by": x.created_by,
+            "deleted": bool(x.deleted_at), "deleted_at": _iso(x.deleted_at),
         } for x in rows
     ]}
 
@@ -722,7 +765,7 @@ async def list_expenses(
 @router.post("/expenses")
 async def create_expense(
     data: ExpenseIn,
-    user: UserResponse = Depends(require_permission("enter_expenses")),
+    user: UserResponse = Depends(require_any_permission("enter_expenses", "financial.expenses.create")),
     db: AsyncSession = Depends(get_db),
 ):
     actor = await resolve_actor_name(db, user)
@@ -738,7 +781,7 @@ async def create_expense(
 async def update_expense(
     expense_id: int,
     data: ExpenseIn,
-    user: UserResponse = Depends(require_permission("enter_expenses")),
+    user: UserResponse = Depends(require_any_permission("enter_expenses", "financial.expenses.edit")),
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(FinancialExpense, expense_id)
@@ -1031,21 +1074,31 @@ async def financial_audit(
 
 @router.post("/documents/{kind}")
 async def upload_private_document(
-    kind: Literal["contracts", "receipts", "certificates"],
+    kind: Literal["contracts", "price-lists", "annexes", "statements", "settlements", "receipts", "certificates"],
     file: UploadFile = File(...),
     user: UserResponse = Depends(require_any_permission(
         "manage_companies_contracts", "enter_expenses", "issue_distinguished_certificate"
     )),
 ):
-    allowed = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+    allowed = {
+        "application/pdf", "image/jpeg", "image/png", "image/webp",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
     if file.content_type not in allowed:
-        raise HTTPException(400, "يسمح فقط بملفات PDF أو الصور")
+        raise HTTPException(400, "صيغة المرفق غير مدعومة")
     content = await file.read(10 * 1024 * 1024 + 1)
     if not content or len(content) > 10 * 1024 * 1024:
         raise HTTPException(400, "حجم الملف يجب ألا يتجاوز 10MB")
     suffix = {
         "application/pdf": ".pdf", "image/jpeg": ".jpg",
         "image/png": ".png", "image/webp": ".webp",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.ms-excel": ".xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
     }[file.content_type]
     key = f"financial/{kind}/{datetime.utcnow():%Y/%m}/{uuid.uuid4().hex}{suffix}"
     await supabase_storage.upload_private_financial_bytes(

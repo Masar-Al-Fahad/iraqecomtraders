@@ -143,7 +143,11 @@ async def ensure_financial_private_bucket() -> None:
             "public": False,
             "file_size_limit": 10 * 1024 * 1024,
             "allowed_mime_types": [
-                "application/pdf", "image/jpeg", "image/png", "image/webp"
+                "application/pdf", "image/jpeg", "image/png", "image/webp",
+                "application/msword",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.ms-excel",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ],
         },
     )

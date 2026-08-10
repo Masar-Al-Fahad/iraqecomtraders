@@ -42,7 +42,67 @@ PERMISSION_KEYS = (
     "issue_distinguished_certificate",
     "view_audit_log",
     "manage_periods",
+    "financial.dashboard.view",
+    "financial.companies.view",
+    "financial.companies.create",
+    "financial.companies.edit",
+    "financial.companies.delete",
+    "financial.contracts.manage",
+    "financial.pricing.manage",
+    "financial.member_links.view",
+    "financial.member_links.create",
+    "financial.member_links.edit",
+    "financial.member_links.delete",
+    "financial.annexes.manage",
+    "financial.monthly.view",
+    "financial.monthly.enter",
+    "financial.monthly.edit",
+    "financial.monthly.approve",
+    "financial.monthly.reopen",
+    "financial.expenses.view",
+    "financial.expenses.create",
+    "financial.expenses.edit",
+    "financial.expenses.delete",
+    "financial.expenses.restore",
+    "financial.revenues.view",
+    "financial.revenues.create",
+    "financial.revenues.edit",
+    "financial.revenues.delete",
+    "financial.revenues.restore",
+    "financial.settlements.view",
+    "financial.settlements.create",
+    "financial.settlements.reverse",
+    "financial.reports.view",
+    "financial.reports.pdf",
+    "financial.reports.xlsx",
+    "financial.reports.print",
+    "financial.audit.view",
+    "financial.certificates.issue",
 )
+
+LEGACY_FINANCIAL_PERMISSION_MAP = {
+    "view_revenue": ("financial.dashboard.view", "financial.revenues.view"),
+    "view_profits": ("financial.dashboard.view",),
+    "view_companies": ("financial.companies.view", "financial.member_links.view"),
+    "manage_companies_contracts": (
+        "financial.companies.view", "financial.companies.create", "financial.companies.edit",
+        "financial.contracts.manage", "financial.pricing.manage",
+    ),
+    "manage_member_company_accounts": (
+        "financial.member_links.view", "financial.member_links.create",
+        "financial.member_links.edit", "financial.annexes.manage",
+    ),
+    "monthly_entry": ("financial.monthly.view", "financial.monthly.enter", "financial.monthly.edit"),
+    "manage_periods": ("financial.monthly.approve", "financial.monthly.reopen"),
+    "view_expenses": ("financial.expenses.view",),
+    "enter_expenses": ("financial.expenses.view", "financial.expenses.create", "financial.expenses.edit"),
+    "view_financial_reports": ("financial.reports.view",),
+    "view_statements": ("financial.reports.view",),
+    "export_excel": ("financial.reports.xlsx",),
+    "print_pdf": ("financial.reports.pdf", "financial.reports.print"),
+    "view_audit_log": ("financial.audit.view",),
+    "issue_distinguished_certificate": ("financial.certificates.issue",),
+}
 
 
 def hash_password(password: str) -> str:
@@ -78,6 +138,10 @@ def normalize_permissions(raw) -> dict:
     for key in PERMISSION_KEYS:
         if key in raw:
             base[key] = bool(raw[key])
+    for legacy, namespaced in LEGACY_FINANCIAL_PERMISSION_MAP.items():
+        if bool(raw.get(legacy)):
+            for key in namespaced:
+                base[key] = True
     return base
 
 
