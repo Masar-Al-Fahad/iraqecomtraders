@@ -139,17 +139,25 @@ async def list_pricing_items(
     )),
     db: AsyncSession = Depends(get_db),
 ):
+    today = date.today()
     latest = select(
         PricingItemVersion.pricing_item_id, func.max(PricingItemVersion.version).label("version")
+    ).where(
+        PricingItemVersion.effective_from <= today,
+        or_(PricingItemVersion.effective_to.is_(None), PricingItemVersion.effective_to >= today),
     ).group_by(PricingItemVersion.pricing_item_id).subquery()
     rows = (await db.execute(
         select(PricingItem, PricingItemVersion)
-        .outerjoin(latest, latest.c.pricing_item_id == PricingItem.id)
-        .outerjoin(PricingItemVersion, and_(
+        .join(latest, latest.c.pricing_item_id == PricingItem.id)
+        .join(PricingItemVersion, and_(
             PricingItemVersion.pricing_item_id == latest.c.pricing_item_id,
             PricingItemVersion.version == latest.c.version,
         ))
-        .where(PricingItem.company_id == company_id, PricingItem.deleted_at.is_(None))
+        .where(
+            PricingItem.company_id == company_id,
+            PricingItem.is_active.is_(True),
+            PricingItem.deleted_at.is_(None),
+        )
         .order_by(PricingItem.name)
     )).all()
     return {"items": [{
@@ -292,15 +300,24 @@ async def list_account_items(
 ):
     account=await db.get(MemberCompanyAccount,account_id)
     if not account:raise HTTPException(404,"ارتباط العضو غير موجود")
+    today=date.today()
     latest=select(PricingItemVersion.pricing_item_id,func.max(PricingItemVersion.version).label("version")).group_by(
-        PricingItemVersion.pricing_item_id).subquery()
+        PricingItemVersion.pricing_item_id).where(
+            PricingItemVersion.effective_from<=today,
+            or_(PricingItemVersion.effective_to.is_(None),PricingItemVersion.effective_to>=today),
+        ).subquery()
     rows = (await db.execute(
         select(MemberAccountItem, PricingItem, PricingItemVersion)
         .join(PricingItem, PricingItem.id == MemberAccountItem.pricing_item_id)
         .outerjoin(latest,latest.c.pricing_item_id==PricingItem.id)
         .outerjoin(PricingItemVersion,and_(PricingItemVersion.pricing_item_id==latest.c.pricing_item_id,
             PricingItemVersion.version==latest.c.version))
-        .where(MemberAccountItem.account_id == account_id).order_by(PricingItem.name)
+        .where(
+            MemberAccountItem.account_id == account_id,
+            MemberAccountItem.is_active.is_(True),
+            PricingItem.is_active.is_(True),
+            PricingItem.deleted_at.is_(None),
+        ).order_by(PricingItem.name)
     )).all()
     return {"items": [{
         "id": link.id, "pricing_item_id": item.id, "name": item.name, "unit": item.unit,

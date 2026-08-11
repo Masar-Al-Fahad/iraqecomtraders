@@ -4,6 +4,7 @@ import { ArchiveRestore, BarChart3, Building2, FileSpreadsheet, Landmark, Link2,
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Toaster } from '@/components/ui/toaster';
 import { useToast } from '@/hooks/use-toast';
 import { useBrand } from '@/lib/brand';
 import { financialErpApi } from '@/lib/financialErpApi';
@@ -54,7 +55,7 @@ export default function FinancialErp(){
 
   if(denied)return <div dir="rtl" className="min-h-screen grid place-items-center bg-slate-50"><div className="text-center space-y-3"><h1 className="font-bold text-xl">لا توجد صلاحية للإدارة المالية</h1><Button onClick={()=>navigate(ROUTES.ADMIN)}>العودة إلى إدارة العضويات</Button></div></div>;
   if(!ready)return <div dir="rtl" className="min-h-screen bg-slate-50 p-6 space-y-4"><Skeleton className="h-20"/><div className="grid grid-cols-4 gap-4"><Skeleton className="h-28"/><Skeleton className="h-28"/><Skeleton className="h-28"/><Skeleton className="h-28"/></div><Skeleton className="h-96"/></div>;
-  return <div dir="rtl" className="min-h-screen bg-slate-50 print:bg-white">
+  return <div dir="rtl" className="min-h-screen bg-slate-50 print:bg-white"><Toaster/>
     <header className="text-white shadow-sm print:hidden" style={{background:brand.header_color||brand.primary_color}}>
       <div className="max-w-[1600px] mx-auto px-4 py-3 flex justify-between items-center gap-3">
         <div className="flex items-center gap-3"><img src={resolveAssetUrl(brand.system_logo)} alt={brand.org_abbr} className="w-12 h-12 object-contain"/><div><h1 className="font-bold text-xl">النظام المالي والإداري</h1><p className="text-xs opacity-80">{brand.system_name} · MFEC Financial ERP</p></div></div>

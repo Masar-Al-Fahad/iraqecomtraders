@@ -29,8 +29,10 @@ from models.financial import (
     FinancialCompany,
     FinancialExpense,
     MemberCertificate,
+    MemberAccountItem,
     MemberCompanyAccount,
     MonthlyActivity,
+    PricingItem,
     ServiceType,
 )
 from models.registrations import Registrations
@@ -102,6 +104,14 @@ class ContractIn(BaseModel):
     notes: Optional[str] = None
 
 
+class AccountItemAssignmentIn(BaseModel):
+    pricing_item_id: int
+    unit_price_override: Optional[Decimal] = Field(default=None, ge=0)
+    mfec_share_type_override: Literal["fixed", "percentage"] | None = None
+    mfec_share_value_override: Optional[Decimal] = Field(default=None, ge=0)
+    is_active: bool = True
+
+
 class AccountIn(BaseModel):
     member_id: int
     company_id: int
@@ -118,6 +128,7 @@ class AccountIn(BaseModel):
     default_mfec_share_value_override: Optional[Decimal] = Field(default=None, ge=0)
     notes: Optional[str] = None
     is_active: bool = True
+    items: Optional[list[AccountItemAssignmentIn]] = None
 
 
 class MonthlyRowIn(BaseModel):
@@ -546,7 +557,7 @@ async def upsert_member_account(
     ))
     item = result.scalar_one_or_none()
     actor = await resolve_actor_name(db, user)
-    payload = data.model_dump()
+    payload = data.model_dump(exclude={"items"})
     payload["statement_url"] = str(data.statement_url) if data.statement_url else None
     payload["customer_portal_url"] = str(data.customer_portal_url) if data.customer_portal_url else None
     old = None
@@ -560,9 +571,37 @@ async def upsert_member_account(
         db.add(item)
         action = "create"
     await db.flush()
+    if data.items is not None:
+        pricing_ids = [assignment.pricing_item_id for assignment in data.items]
+        if len(pricing_ids) != len(set(pricing_ids)):
+            raise HTTPException(400, "لا يمكن تكرار فقرة التحاسب نفسها")
+        valid_ids = set((await db.execute(
+            select(PricingItem.id).where(
+                PricingItem.id.in_(pricing_ids),
+                PricingItem.company_id == data.company_id,
+                PricingItem.is_active.is_(True),
+                PricingItem.deleted_at.is_(None),
+            )
+        )).scalars().all()) if pricing_ids else set()
+        if valid_ids != set(pricing_ids):
+            raise HTTPException(409, "إحدى فقرات التحاسب غير فعالة أو لا تتبع الشركة")
+        existing_items = {
+            row.pricing_item_id: row for row in (await db.execute(
+                select(MemberAccountItem).where(MemberAccountItem.account_id == item.id)
+            )).scalars().all()
+        }
+        for row in existing_items.values():
+            row.is_active = False
+        for assignment in data.items:
+            row = existing_items.get(assignment.pricing_item_id) or MemberAccountItem(
+                account_id=item.id, pricing_item_id=assignment.pricing_item_id
+            )
+            for key, value in assignment.model_dump().items():
+                setattr(row, key, value)
+            db.add(row)
     add_audit(db, action=action, entity_type="member_company_account", entity_id=item.id, actor=actor, old_values=old, new_values=payload)
     await db.commit()
-    return {"id": item.id}
+    return {"id": item.id, "saved_items": len(data.items) if data.items is not None else None}
 
 
 @router.get("/monthly-entry")
