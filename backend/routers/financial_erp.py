@@ -585,10 +585,11 @@ async def _statement_grid(db: AsyncSession, company_id: int, year: int, month: i
         MonthlyStatement.accounting_year == year, MonthlyStatement.accounting_month == month,
     ))).scalar_one_or_none()
     rows = (await db.execute(
-        select(MemberCompanyAccount, MemberAccountItem, Registrations, PricingItem)
+        select(MemberCompanyAccount, MemberAccountItem, Registrations, PricingItem, FinancialCompany)
         .join(MemberAccountItem, MemberAccountItem.account_id == MemberCompanyAccount.id)
         .join(Registrations, Registrations.id == MemberCompanyAccount.member_id)
         .join(PricingItem, PricingItem.id == MemberAccountItem.pricing_item_id)
+        .join(FinancialCompany, FinancialCompany.id == MemberCompanyAccount.company_id)
         .where(
             MemberCompanyAccount.company_id == company_id, MemberCompanyAccount.deleted_at.is_(None),
             MemberCompanyAccount.status == "active", MemberAccountItem.is_active.is_(True),
@@ -603,52 +604,72 @@ async def _statement_grid(db: AsyncSession, company_id: int, year: int, month: i
     return statement, period_start, period_end, rows, existing
 
 
-@router.get("/statements/grid")
+@router.get("/monthly-statements/grid")
 async def statement_grid(
-    company_id: int, accounting_year: int, accounting_month: int,
+    company_id: int = Query(..., ge=1),
+    accounting_year: int = Query(..., ge=2000, le=2200),
+    accounting_month: int = Query(..., ge=1, le=12),
+    member_id: int | None = Query(default=None, ge=1),
+    pricing_item_id: int | None = Query(default=None, ge=1),
     user: UserResponse = Depends(require_any_permission("financial.monthly.view", "financial.monthly.enter", "financial.reports.view")),
     db: AsyncSession = Depends(get_db),
 ):
+    """Load one row per active member×pricing-item link for the company period.
+
+    Optional filters must be omitted entirely when unused (not empty strings).
+    Path is intentionally NOT /statements/grid — that collides with
+    GET /statements/{member_id} and yields 422 int_parsing on input \"grid\".
+    """
     statement, _, _, rows, existing = await _statement_grid(db, company_id, accounting_year, accounting_month)
-    finance = _is_finance_user(user)
+    on_date = date(accounting_year, accounting_month, 1)
     items = []
-    for account, link, member, item in rows:
+    for account, link, member, item, company in rows:
+        if member_id is not None and member.id != member_id:
+            continue
+        if pricing_item_id is not None and item.id != pricing_item_id:
+            continue
         old = existing.get(account.id * 10_000_000 + item.id)
-        row = {
-            "account_item_id": link.id, "account_id": account.id, "member_id": member.id,
-            "member_name": member.merchant_name, "business_name": member.business_name,
-            "membership_number": member.membership_number, "governorate": member.governorate,
-            "registered_name": account.registered_name, "registered_phone": account.registered_phone,
+        if old:
+            unit_price = money(old.company_unit_price_snapshot)
+            share_type = old.mfec_share_type_snapshot
+            share_value = money(old.mfec_share_value_snapshot)
+            quantity = money(old.quantity)
+            gross = money(old.gross_business_amount)
+            due = money(old.mfec_due_amount)
+            settlement_status = old.settlement_status
+        else:
+            _item, _version, unit_price, share_type, share_value = await resolve_account_item_pricing(
+                db, link, account, on_date
+            )
+            quantity = money(0)
+            gross, due = calculate_line(quantity, unit_price, share_type, share_value)
+            settlement_status = "unsettled"
+        items.append({
+            "account_item_id": link.id,
+            "account_id": account.id,
+            "member_id": member.id,
+            "member_name": member.merchant_name,
+            "business_name": member.business_name,
+            "membership_number": member.membership_number,
+            "governorate": member.governorate or "",
+            "company_id": company.id,
+            "company_name": company.name,
+            "registered_name": account.registered_name,
+            "registered_phone": account.registered_phone,
             "customer_code": account.customer_code,
             "customer_portal_url": account.customer_portal_url or account.statement_url,
-            "pricing_item_id": item.id, "pricing_item_name": item.name, "unit": item.unit,
-            "quantity": float(old.quantity) if old else 0,
+            "pricing_item_id": item.id,
+            "pricing_item_name": item.name,
+            "unit": item.unit,
+            "quantity": float(quantity),
             "excluded": bool(old and old.excluded_at),
-        }
-        if finance:
-            if old:
-                row.update({
-                    "effective_unit_price": float(old.company_unit_price_snapshot),
-                    "effective_mfec_share_type": old.mfec_share_type_snapshot,
-                    "effective_mfec_share_value": float(old.mfec_share_value_snapshot),
-                    "mfec_due_amount": float(old.mfec_due_amount),
-                    "gross_business_amount": float(old.gross_business_amount),
-                    "settlement_status": old.settlement_status,
-                })
-            else:
-                _item, _version, unit_price, share_type, share_value = await resolve_account_item_pricing(
-                    db, link, account, date(accounting_year, accounting_month, 1)
-                )
-                gross, due = calculate_line(0, unit_price, share_type, share_value)
-                row.update({
-                    "effective_unit_price": float(unit_price),
-                    "effective_mfec_share_type": share_type,
-                    "effective_mfec_share_value": float(share_value),
-                    "gross_business_amount": float(gross),
-                    "mfec_due_amount": float(due),
-                    "settlement_status": "unsettled",
-                })
-        items.append(row)
+            "effective_unit_price": float(unit_price),
+            "effective_mfec_share_type": share_type,
+            "effective_mfec_share_value": float(share_value),
+            "gross_business_amount": float(gross),
+            "mfec_due_amount": float(due),
+            "settlement_status": settlement_status,
+        })
     return {
         "statement_id": statement.id if statement else None,
         "status": statement.status if statement else "draft",
@@ -659,6 +680,7 @@ async def statement_grid(
         "received_at": statement.received_at.isoformat() if statement and statement.received_at else None,
         "notes": statement.notes if statement else None,
         "items": items,
+        "row_count": len(items),
     }
 
 
@@ -685,28 +707,82 @@ async def save_statement_bulk(
     else:
         statement.period_start=start;statement.period_end=end
         statement.received_at=data.received_at;statement.notes=data.notes
-    links = {link.id: (account, link, member, item) for account, link, member, item in grid}
+    links = {link.id: (account, link, member, item) for account, link, member, item, _company in grid}
     saved = 0
+    skipped_zero = 0
+    failed: list[dict] = []
     for incoming in data.lines:
-        if incoming.account_item_id not in links: raise HTTPException(409, "بند ارتباط غير صالح للشركة")
+        if incoming.account_item_id not in links:
+            failed.append({"account_item_id": incoming.account_item_id, "error": "بند ارتباط غير صالح للشركة"})
+            continue
         account, link, member, _item = links[incoming.account_item_id]
-        item, version, unit_price, share_type, share_value = await resolve_account_item_pricing(db, link, account, start)
-        gross, due = calculate_line(incoming.quantity, unit_price, share_type, share_value)
+        key = account.id * 10_000_000 + link.pricing_item_id
+        # Empty/zero quantity = no movement for this item in the period.
+        if money(incoming.quantity) <= 0 and not incoming.excluded:
+            old_zero = existing.pop(key, None)
+            if old_zero is not None:
+                if old_zero.settlement_status == "settled":
+                    failed.append({
+                        "account_item_id": incoming.account_item_id,
+                        "member_name": member.merchant_name,
+                        "pricing_item": _item.name,
+                        "error": "لا يمكن حذف سطر تمت تسويته بتصفير الكمية",
+                    })
+                    continue
+                await db.delete(old_zero)
+            skipped_zero += 1
+            continue
+        try:
+            item, version, unit_price, share_type, share_value = await resolve_account_item_pricing(
+                db, link, account, start
+            )
+            gross, due = calculate_line(incoming.quantity, unit_price, share_type, share_value)
+        except Exception as exc:
+            failed.append({
+                "account_item_id": incoming.account_item_id,
+                "member_name": member.merchant_name,
+                "pricing_item": _item.name,
+                "error": getattr(exc, "detail", None) or str(exc),
+            })
+            continue
         row = existing.get(account.id * 10_000_000 + item.id) or MonthlyEntryLine(
             statement_id=statement.id, member_id=member.id, member_company_account_id=account.id,
             pricing_item_id=item.id, pricing_item_version_id=version.id, entered_by=actor, updated_by=actor,
             settlement_status="unsettled",
         )
-        row.quantity=incoming.quantity; row.unit_snapshot=item.unit
-        row.pricing_item_version_id=version.id; row.company_unit_price_snapshot=unit_price
-        row.mfec_share_type_snapshot=share_type; row.mfec_share_value_snapshot=share_value
-        row.gross_business_amount=gross; row.mfec_due_amount=due; row.updated_by=actor
-        row.excluded_at=datetime.now() if incoming.excluded else None
-        row.excluded_by=actor if incoming.excluded else None; row.exclusion_reason=incoming.exclusion_reason
-        db.add(row); saved += 1
-    add_audit(db, action="statement.bulk_save", entity_type="monthly_statement", entity_id=statement.id, actor=actor, new_values={"saved": saved})
+        row.quantity = incoming.quantity
+        row.unit_snapshot = item.unit
+        row.pricing_item_version_id = version.id
+        row.company_unit_price_snapshot = unit_price
+        row.mfec_share_type_snapshot = share_type
+        row.mfec_share_value_snapshot = share_value
+        row.gross_business_amount = gross
+        row.mfec_due_amount = due
+        row.updated_by = actor
+        row.excluded_at = datetime.now() if incoming.excluded else None
+        row.excluded_by = actor if incoming.excluded else None
+        row.exclusion_reason = incoming.exclusion_reason
+        db.add(row)
+        saved += 1
+    if not saved and failed and not skipped_zero:
+        raise HTTPException(409, {
+            "message": "تعذر حفظ أي صف",
+            "failed": failed,
+            "saved": 0,
+        })
+    add_audit(
+        db, action="statement.bulk_save", entity_type="monthly_statement", entity_id=statement.id,
+        actor=actor, new_values={"saved": saved, "failed": len(failed), "skipped_zero": skipped_zero},
+    )
     await db.commit()
-    return {"statement_id": statement.id, "status": statement.status, "saved": saved}
+    return {
+        "statement_id": statement.id,
+        "status": statement.status,
+        "saved": saved,
+        "failed": len(failed),
+        "skipped_zero": skipped_zero,
+        "failures": failed,
+    }
 
 
 @router.post("/statements/{statement_id}/approve")

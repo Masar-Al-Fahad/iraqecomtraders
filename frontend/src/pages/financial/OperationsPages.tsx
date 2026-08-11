@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, FileSpreadsheet, LockKeyhole, Printer, RotateCcw, Save, Scale, Trash2 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Eye, FileSpreadsheet, Printer, RotateCcw, Save, Scale, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -15,43 +14,282 @@ type Props={companies:Company[];services:ServiceType[];can:(key:string)=>boolean
 const now=new Date();const today=()=>new Date().toISOString().slice(0,10);
 const monthRange=(year:number,month:number)=>({from:`${year}-${String(month).padStart(2,'0')}-01`,to:new Date(year,month,0).toISOString().slice(0,10)});
 
-export function MonthlyPage({companies,can,finance,notify,success}:Props){
-  const [companyId,setCompanyId]=useState<number>(companies[0]?.id||0);const [year,setYear]=useState(now.getFullYear());const [month,setMonth]=useState(now.getMonth()+1);
-  const [grid,setGrid]=useState<StatementGridRow[]>([]);const [statementId,setStatementId]=useState<number|null>(null);const [status,setStatus]=useState('draft');
-  const initialRange=monthRange(year,month);
-  const [dateFrom,setDateFrom]=useState(initialRange.from);const [dateTo,setDateTo]=useState(initialRange.to);
-  const [memberFilter,setMemberFilter]=useState('');const [itemFilter,setItemFilter]=useState('');const [governorate,setGovernorate]=useState('');
-  const [receivedAt,setReceivedAt]=useState('');const [notes,setNotes]=useState('');
-  const [attachments,setAttachments]=useState<Attachment[]>([]);const [busy,setBusy]=useState(false);const inputs=useRef<(HTMLInputElement|null)[]>([]);
-  useEffect(()=>{if(!companyId&&companies[0])setCompanyId(companies[0].id)},[companies]);
+function calcLineAmounts(quantity:number, unitPrice:number, shareType?:'fixed'|'percentage', shareValue=0){
+  const gross=quantity*unitPrice;
+  const due=shareType==='percentage'?gross*(shareValue/100):quantity*shareValue;
+  return {gross_business_amount:gross, mfec_due_amount:due};
+}
+
+function periodFromDate(from:string){
+  if(!from || from.length<7)return {year:now.getFullYear(), month:now.getMonth()+1};
+  const year=Number(from.slice(0,4));
+  const month=Number(from.slice(5,7));
+  if(!year||month<1||month>12)return {year:now.getFullYear(), month:now.getMonth()+1};
+  return {year, month};
+}
+
+export function MonthlyPage({companies,can,notify,success}:Props){
+  const [companyId,setCompanyId]=useState<number>(companies[0]?.id||0);
+  const initialRange=monthRange(now.getFullYear(), now.getMonth()+1);
+  const [dateFrom,setDateFrom]=useState(initialRange.from);
+  const [dateTo,setDateTo]=useState(initialRange.to);
+  const [grid,setGrid]=useState<StatementGridRow[]>([]);
+  const [statementId,setStatementId]=useState<number|null>(null);
+  const [status,setStatus]=useState('draft');
+  const [memberFilter,setMemberFilter]=useState('');
+  const [itemFilter,setItemFilter]=useState('');
+  const [governorate,setGovernorate]=useState('');
+  const [receivedAt,setReceivedAt]=useState('');
+  const [notes,setNotes]=useState('');
+  const [attachments,setAttachments]=useState<Attachment[]>([]);
+  const [busy,setBusy]=useState(false);
+  const inputs=useRef<(HTMLInputElement|null)[]>([]);
+
+  const {year, month}=useMemo(()=>periodFromDate(dateFrom),[dateFrom]);
+
+  useEffect(()=>{if(!companyId&&companies[0])setCompanyId(companies[0].id)},[companies,companyId]);
+
+  // Client-side only — never send "all" filter labels as API integers.
   const visible=useMemo(()=>grid.filter(row=>
-    (!memberFilter||String(row.member_id)===memberFilter)&&(!itemFilter||String(row.pricing_item_id)===itemFilter)&&
-    (!governorate||row.governorate.includes(governorate))),[grid,memberFilter,itemFilter,governorate]);
-  const load=async()=>{if(!companyId)return;setBusy(true);try{const x=await financialErpApi.statementGrid(companyId,year,month);setGrid(x.items);setStatementId(x.statement_id);setStatus(x.status);setDateFrom(x.period_start);setDateTo(x.period_end);setReceivedAt(x.received_at||'');setNotes(x.notes||'');setAttachments(x.statement_id?(await financialErpApi.statementAttachments(x.statement_id)).items:[])}catch(e){notify(e)}finally{setBusy(false)}};
-  const save=async()=>{if(!grid.length){notify(new Error('حمّل قائمة الأعضاء والفقرات قبل الحفظ'));return}if(dateFrom&&dateTo&&dateTo<dateFrom){notify(new Error('تاريخ نهاية الفترة يجب أن يكون بعد تاريخ البداية'));return}setBusy(true);try{const x=await financialErpApi.saveStatement({company_id:companyId,accounting_year:year,accounting_month:month,period_start:dateFrom||null,period_end:dateTo||null,received_at:receivedAt||null,notes:notes||null,lines:grid.map(r=>({account_item_id:r.account_item_id,quantity:r.quantity,excluded:r.excluded}))});setStatementId(x.statement_id);setStatus(x.status);success(`تم الحفظ الجماعي لـ ${x.saved} فقرة`);return x.statement_id}catch(e){notify(e)}finally{setBusy(false)}};
-  const approve=async()=>{const id=statementId||await save();if(id){try{await financialErpApi.approveStatement(id);setStatus('approved');success('تم اعتماد الكشف كاملًا وأصبحت الأسعار والكميات ثابتة')}catch(e){notify(e)}}};
-  const upload=async(file:File,replacedId?:number)=>{const id=statementId||await save();if(!id)return;try{const up=await financialErpApi.upload('statements',file);await financialErpApi.addStatementAttachment(id,{...up,original_filename:file.name,mime_type:file.type,size_bytes:file.size,replaced_id:replacedId||null});setAttachments((await financialErpApi.statementAttachments(id)).items);success(replacedId?'تم استبدال الكشف الأصلي':'تم رفع الكشف الأصلي')}catch(e){notify(e)}};
+    (!memberFilter||String(row.member_id)===memberFilter)&&
+    (!itemFilter||String(row.pricing_item_id)===itemFilter)&&
+    (!governorate.trim()||row.governorate.includes(governorate.trim()))
+  ),[grid,memberFilter,itemFilter,governorate]);
+
+  const memberOptions=useMemo(()=>Array.from(new Map(grid.map(r=>[r.member_id,r])).values()),[grid]);
+  const itemOptions=useMemo(()=>Array.from(new Map(grid.map(r=>[r.pricing_item_id,r])).values()),[grid]);
+
+  const applyLoaded=async(x:Awaited<ReturnType<typeof financialErpApi.statementGrid>>)=>{
+    setGrid(x.items);
+    setStatementId(x.statement_id);
+    setStatus(x.status);
+    setDateFrom(x.period_start);
+    setDateTo(x.period_end);
+    setReceivedAt(x.received_at||'');
+    setNotes(x.notes||'');
+    setAttachments(x.statement_id?(await financialErpApi.statementAttachments(x.statement_id)).items:[]);
+  };
+
+  const load=async()=>{
+    if(!(companyId>0)){notify(new Error('اختر شركة صحيحة قبل التحميل'));return}
+    setBusy(true);
+    try{
+      await applyLoaded(await financialErpApi.statementGrid(companyId, year, month));
+    }catch(e){notify(e)}
+    finally{setBusy(false)}
+  };
+
+  const setQuantity=(accountItemId:number, raw:string)=>{
+    if(raw.trim()===''){
+      setGrid(rows=>rows.map(x=>x.account_item_id===accountItemId?{
+        ...x, quantity:0, gross_business_amount:0, mfec_due_amount:0,
+      }:x));
+      return;
+    }
+    const quantity=Number(raw);
+    if(Number.isNaN(quantity)||quantity<0)return;
+    setGrid(rows=>rows.map(x=>{
+      if(x.account_item_id!==accountItemId)return x;
+      return {
+        ...x,
+        quantity,
+        ...calcLineAmounts(quantity, Number(x.effective_unit_price||0), x.effective_mfec_share_type, Number(x.effective_mfec_share_value||0)),
+      };
+    }));
+  };
+
+  const focusNextQuantity=(index:number)=>{
+    const next=inputs.current[index+1];
+    if(!next)return;
+    next.focus();
+    next.select();
+  };
+
+  const save=async(approveAfter=false)=>{
+    if(!grid.length){notify(new Error('حمّل قائمة الأعضاء والفقرات قبل الحفظ'));return}
+    if(dateFrom&&dateTo&&dateTo<dateFrom){notify(new Error('تاريخ نهاية الفترة يجب أن يكون بعد تاريخ البداية'));return}
+    if(!(companyId>0)){notify(new Error('شركة غير صالحة'));return}
+    setBusy(true);
+    try{
+      const x=await financialErpApi.saveStatement({
+        company_id:companyId,
+        accounting_year:year,
+        accounting_month:month,
+        period_start:dateFrom||null,
+        period_end:dateTo||null,
+        received_at:receivedAt||null,
+        notes:notes||null,
+        lines:grid.map(r=>({account_item_id:r.account_item_id, quantity:r.quantity||0, excluded:!!r.excluded})),
+      });
+      setStatementId(x.statement_id);
+      setStatus(x.status);
+      let message=`تم حفظ ${x.saved} صفًا`;
+      if(x.failed)message+=`، وفشل ${x.failed}`;
+      if(approveAfter&&can('financial.monthly.approve')){
+        await financialErpApi.approveStatement(x.statement_id);
+        setStatus('approved');
+        message+=' وتم اعتماد الإدخال';
+      }
+      success(message);
+      await applyLoaded(await financialErpApi.statementGrid(companyId, year, month));
+      return x.statement_id;
+    }catch(e){notify(e)}
+    finally{setBusy(false)}
+  };
+
+  const upload=async(file:File, replacedId?:number)=>{
+    const id=statementId||await save(false);
+    if(!id)return;
+    try{
+      const up=await financialErpApi.upload('statements',file);
+      await financialErpApi.addStatementAttachment(id,{
+        ...up,
+        original_filename:file.name,
+        mime_type:file.type,
+        size_bytes:file.size,
+        replaced_id:replacedId||null,
+      });
+      setAttachments((await financialErpApi.statementAttachments(id)).items);
+      success(replacedId?'تم استبدال الكشف الأصلي':'تم رفع الكشف الأصلي');
+    }catch(e){notify(e)}
+  };
+
+  const canEnter=status!=='approved'&&can('financial.monthly.enter');
+  const companyName=companies.find(c=>c.id===companyId)?.name||'';
+
   return <div className="space-y-4">
-    <PageTitle title="الإدخال الشهري" description="صف مستقل لكل عضو وفقرة ووحدة؛ تحفظ القيم جماعيًا وتثبت الأسعار عند الحفظ."/>
-    <Card><CardContent className="p-3 grid sm:grid-cols-2 xl:grid-cols-5 gap-3 items-end">
-      <Field label="الشركة"><select className="h-10 border rounded-md px-3 min-w-56" value={companyId} onChange={e=>setCompanyId(Number(e.target.value))}>{companies.map(c=><option key={c.id} value={c.id}>{c.name} · {c.service_type_name}</option>)}</select></Field>
-      <Field label="السنة"><Input className="w-28" type="number" value={year} onChange={e=>setYear(Number(e.target.value))}/></Field><Field label="الشهر"><Input className="w-24" type="number" min={1} max={12} value={month} onChange={e=>setMonth(Number(e.target.value))}/></Field>
-      <Field label="من تاريخ"><SafeDateInput value={dateFrom} onChange={e=>setDateFrom(e.target.value)}/></Field><Field label="إلى تاريخ"><SafeDateInput value={dateTo} onChange={e=>setDateTo(e.target.value)}/></Field>
-      <Field label="العضو"><select className="h-10 border rounded-md px-2 w-full" value={memberFilter} onChange={e=>setMemberFilter(e.target.value)}><option value="">كل الأعضاء</option>{Array.from(new Map(grid.map(r=>[r.member_id,r])).values()).map(r=><option key={r.member_id} value={r.member_id}>{r.membership_number} · {r.member_name}</option>)}</select></Field>
-      <Field label="الفقرة"><select className="h-10 border rounded-md px-2 w-full" value={itemFilter} onChange={e=>setItemFilter(e.target.value)}><option value="">كل الفقرات</option>{Array.from(new Map(grid.map(r=>[r.pricing_item_id,r])).values()).map(r=><option key={r.pricing_item_id} value={r.pricing_item_id}>{r.pricing_item_name}</option>)}</select></Field>
+    <PageTitle title="الإدخال الشهري" description="كشف جماعي لشركة واحدة: حمّل كل الارتباطات، اكتب الكمية فقط لكل فقرة، ثم احفظ واعتمد. الأسعار وحصص MFEC تُجلب تلقائيًا من تسعير الشركة أو Override العضو."/>
+    <Card><CardContent className="p-3 grid sm:grid-cols-2 xl:grid-cols-4 gap-3 items-end">
+      <Field label="الشركة"><select className="h-10 border rounded-md px-3 min-w-56" value={companyId||''} onChange={e=>{
+        const id=Number(e.target.value);
+        setCompanyId(Number.isFinite(id)&&id>0?id:0);
+        setGrid([]);
+        setStatementId(null);
+        setMemberFilter('');
+        setItemFilter('');
+      }}>{companies.map(c=><option key={c.id} value={c.id}>{c.name} · {c.service_type_name}</option>)}</select></Field>
+      <Field label="من تاريخ"><SafeDateInput value={dateFrom} onChange={e=>{
+        const next=e.target.value;
+        setDateFrom(next);
+        const p=periodFromDate(next);
+        const range=monthRange(p.year,p.month);
+        setDateTo(range.to);
+        setGrid([]);
+        setStatementId(null);
+      }}/></Field>
+      <Field label="إلى تاريخ"><SafeDateInput value={dateTo} onChange={e=>setDateTo(e.target.value)}/></Field>
+      <Field label="العضو"><select className="h-10 border rounded-md px-2 w-full" value={memberFilter} onChange={e=>setMemberFilter(e.target.value)}><option value="">كل الأعضاء</option>{memberOptions.map(r=><option key={r.member_id} value={r.member_id}>{r.membership_number} · {r.member_name}</option>)}</select></Field>
+      <Field label="الفقرة"><select className="h-10 border rounded-md px-2 w-full" value={itemFilter} onChange={e=>setItemFilter(e.target.value)}><option value="">كل الفقرات</option>{itemOptions.map(r=><option key={r.pricing_item_id} value={r.pricing_item_id}>{r.pricing_item_name}</option>)}</select></Field>
       <Field label="المحافظة"><Input value={governorate} onChange={e=>setGovernorate(e.target.value)} placeholder="كل المحافظات"/></Field>
       <Field label="تاريخ استلام الكشف"><SafeDateInput value={receivedAt} onChange={e=>setReceivedAt(e.target.value)}/></Field>
       <Field label="ملاحظات الكشف"><Input value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
-      <Button onClick={load} disabled={busy}>تحميل جميع الارتباطات</Button><StatusBadge value={status}/>
-      {status!=='approved'&&can('financial.monthly.enter')&&<FileButton label="رفع الكشف الأصلي" onFile={upload}/>}
-      {statementId&&attachments.map(a=><div key={a.id} className="flex gap-1"><Button type="button" size="sm" variant="outline" onClick={()=>financialErpApi.openDocument(a.object_key)}><Eye className="w-4 h-4 ml-1"/>{a.original_filename}</Button>{status!=='approved'&&can('financial.monthly.edit')&&<><FileButton label="استبدال" onFile={file=>upload(file,a.id)}/><Button type="button" size="icon" variant="ghost" onClick={async()=>{await financialErpApi.deleteStatementAttachment(statementId,a.id);setAttachments((await financialErpApi.statementAttachments(statementId)).items)}}><Trash2 className="w-4 h-4 text-red-600"/></Button></>}</div>)}
+      <Button onClick={()=>void load()} disabled={busy||!(companyId>0)}>تحميل جميع الارتباطات</Button>
+      <StatusBadge value={status}/>
+      {canEnter&&<FileButton label="رفع الكشف الأصلي" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,application/pdf,image/*" onFile={upload}/>}
+      {statementId&&attachments.map(a=><div key={a.id} className="flex gap-1 flex-wrap items-center">
+        <Button type="button" size="sm" variant="outline" onClick={()=>financialErpApi.openDocument(a.object_key)}><Eye className="w-4 h-4 ml-1"/>{a.original_filename}</Button>
+        {status!=='approved'&&can('financial.monthly.edit')&&<>
+          <FileButton label="استبدال" onFile={file=>upload(file,a.id)}/>
+          <Button type="button" size="icon" variant="ghost" onClick={async()=>{await financialErpApi.deleteStatementAttachment(statementId,a.id);setAttachments((await financialErpApi.statementAttachments(statementId)).items)}}><Trash2 className="w-4 h-4 text-red-600"/></Button>
+        </>}
+      </div>)}
     </CardContent></Card>
-    <div className="overflow-auto max-h-[62vh] border rounded-xl bg-white"><table className="w-full text-sm whitespace-nowrap"><thead className="bg-slate-100 sticky top-0 z-20"><tr><th className="p-3 text-right sticky right-0 bg-slate-100 z-30">العضو</th><th className="p-3 text-right sticky right-[190px] bg-slate-100 z-30">الشركة/العميل</th><th>الفقرة</th><th>الوحدة</th><th>الكمية</th>{finance&&<><th>حجم الأعمال</th><th>حصة MFEC</th></>}<th>التحاسب</th></tr></thead><tbody>
-      {visible.map((r,i)=><tr key={r.account_item_id} className="border-t hover:bg-blue-50/40"><td className="p-3 sticky right-0 bg-white min-w-[190px]"><b>{r.member_name}</b><small className="block text-slate-500">{r.business_name} · {r.membership_number} · {r.governorate}</small></td><td className="p-3 sticky right-[190px] bg-white min-w-[210px]">{r.registered_name||'-'}<small className="block">{r.customer_code} · {r.registered_phone}</small></td><td>{r.pricing_item_name}</td><td>{r.unit}</td><td className="p-2"><Input ref={el=>inputs.current[i]=el} disabled={status==='approved'||!can('financial.monthly.enter')} className="w-28 text-center font-bold" type="number" min={0} step="any" value={r.quantity} onChange={e=>{const quantity=Number(e.target.value);setGrid(rows=>rows.map(x=>x.account_item_id===r.account_item_id?{...x,quantity,gross_business_amount:quantity*Number(x.effective_unit_price||0),mfec_due_amount:x.effective_mfec_share_type==='percentage'?quantity*Number(x.effective_unit_price||0)*Number(x.effective_mfec_share_value||0)/100:quantity*Number(x.effective_mfec_share_value||0)}:x))}} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();inputs.current[i+1]?.focus();inputs.current[i+1]?.select()}}}/></td>
-        {finance&&<><td>{money(r.gross_business_amount)}</td><td>{money(r.mfec_due_amount)}</td></>}<td><StatusBadge value={r.settlement_status||'unsettled'}/></td></tr>)}
-      {!grid.length&&<tr><td colSpan={finance?8:6}><Empty title="لم يتم تحميل الجدول" description="اختر الشركة والفترة ثم اضغط تحميل جميع الارتباطات."/></td></tr>}
-    </tbody></table></div>
-    {!!grid.length&&<div className="flex gap-2">{status!=='approved'&&can('financial.monthly.enter')&&<Button disabled={busy} onClick={()=>void save()}><Save className="w-4 h-4 ml-2"/>حفظ جماعي</Button>}{status!=='approved'&&can('financial.monthly.approve')&&<Button variant="outline" onClick={approve}><LockKeyhole className="w-4 h-4 ml-2"/>اعتماد الكشف</Button>}{status==='approved'&&can('financial.monthly.reopen')&&<Button variant="destructive" onClick={async()=>{const reason=prompt('سبب إعادة فتح الكشف (يسجل بالتدقيق)');if(reason&&statementId){try{await financialErpApi.reopenStatement(statementId,reason);setStatus('draft')}catch(e){notify(e)}}}}><RotateCcw className="w-4 h-4 ml-2"/>إعادة فتح</Button>}</div>}
+
+    <div className="overflow-auto max-h-[62vh] border rounded-xl bg-white">
+      <table className="w-full text-sm whitespace-nowrap">
+        <thead className="bg-slate-100 sticky top-0 z-20">
+          <tr>
+            <th className="p-3 text-right sticky right-0 bg-slate-100 z-30 min-w-[170px]">العضو</th>
+            <th className="p-3 text-right">الشركة/العميل</th>
+            <th className="p-3 text-right">الفقرة</th>
+            <th className="p-3 text-right">الوحدة</th>
+            <th className="p-3 text-right">الكمية</th>
+            <th className="p-3 text-right">سعر العميل</th>
+            <th className="p-3 text-right">حجم الأعمال</th>
+            <th className="p-3 text-right">حصة MFEC</th>
+            <th className="p-3 text-right">التحاسب</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r,i)=>{
+            const prev=visible[i-1];
+            const memberStart=!prev||prev.member_id!==r.member_id;
+            return (
+              <tr key={r.account_item_id} className={`border-t hover:bg-blue-50/40 ${memberStart?'border-t-2 border-t-slate-300':''}`}>
+                <td className="p-3 sticky right-0 bg-white min-w-[170px]">
+                  {memberStart?(
+                    <>
+                      <b>{r.member_name}</b>
+                      <small className="block text-slate-500">{r.membership_number}{r.governorate?` · ${r.governorate}`:''}</small>
+                    </>
+                  ):<span className="text-slate-300">↳</span>}
+                </td>
+                <td className="p-3">
+                  {r.registered_name||companyName||'-'}
+                  <small className="block text-slate-500">{r.customer_code||r.registered_phone||r.company_name||''}</small>
+                </td>
+                <td className="p-3">{r.pricing_item_name}</td>
+                <td className="p-3">{r.unit}</td>
+                <td className="p-2">
+                  <Input
+                    ref={el=>{inputs.current[i]=el}}
+                    disabled={!canEnter}
+                    className="w-28 text-center font-bold"
+                    type="number"
+                    min={0}
+                    step="any"
+                    placeholder="—"
+                    value={r.quantity?r.quantity:''}
+                    onChange={e=>setQuantity(r.account_item_id, e.target.value)}
+                    onFocus={e=>e.currentTarget.select()}
+                    onKeyDown={e=>{
+                      if(e.key==='Enter'){
+                        e.preventDefault();
+                        focusNextQuantity(i);
+                      }
+                    }}
+                  />
+                </td>
+                <td className="p-3 text-slate-700">{money(r.effective_unit_price)}</td>
+                <td className="p-3 font-semibold">{money(r.gross_business_amount)}</td>
+                <td className="p-3 font-semibold text-emerald-800">{money(r.mfec_due_amount)}</td>
+                <td className="p-3"><StatusBadge value={r.settlement_status||'unsettled'}/></td>
+              </tr>
+            );
+          })}
+          {!grid.length&&(
+            <tr><td colSpan={9}><Empty title="لم يتم تحميل الجدول" description="اختر الشركة والفترة ثم اضغط تحميل جميع الارتباطات."/></td></tr>
+          )}
+          {!!grid.length&&!visible.length&&(
+            <tr><td colSpan={9}><Empty title="لا توجد صفوف مطابقة" description="عدّل فلاتر العضو أو الفقرة أو المحافظة (فلترة محلية فقط)."/></td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+
+    {!!grid.length&&(
+      <div className="flex flex-wrap gap-2 items-center">
+        <span className="text-sm text-slate-600">المعروض {visible.length} من {grid.length} فقرة · الفترة {year}/{String(month).padStart(2,'0')}</span>
+        {canEnter&&can('financial.monthly.approve')&&(
+          <Button disabled={busy} onClick={()=>void save(true)}><Save className="w-4 h-4 ml-2"/>حفظ واعتماد الإدخال</Button>
+        )}
+        {canEnter&&!can('financial.monthly.approve')&&(
+          <Button disabled={busy} onClick={()=>void save(false)}><Save className="w-4 h-4 ml-2"/>حفظ الإدخال</Button>
+        )}
+        {canEnter&&can('financial.monthly.approve')&&(
+          <Button variant="outline" disabled={busy} onClick={()=>void save(false)}>حفظ مسودة فقط</Button>
+        )}
+        {status==='approved'&&can('financial.monthly.reopen')&&(
+          <Button variant="destructive" onClick={async()=>{
+            const reason=prompt('سبب إعادة فتح الكشف (يسجل بالتدقيق)');
+            if(reason&&statementId){
+              try{await financialErpApi.reopenStatement(statementId,reason);setStatus('draft')}
+              catch(e){notify(e)}
+            }
+          }}><RotateCcw className="w-4 h-4 ml-2"/>إعادة فتح</Button>
+        )}
+      </div>
+    )}
   </div>;
 }
 

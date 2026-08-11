@@ -28,7 +28,8 @@ export type AccountItem = {
 };
 export type StatementGridRow = {
   account_item_id:number; member_id:number; member_name:string; business_name?:string;
-  membership_number?:string; governorate:string; registered_name?:string; registered_phone?:string;
+  membership_number?:string; governorate:string; company_id?:number; company_name?:string;
+  registered_name?:string; registered_phone?:string;
   customer_code?:string; customer_portal_url?:string; pricing_item_id:number;
   pricing_item_name:string; unit:string; quantity:number; excluded:boolean;
   effective_unit_price?:number; effective_mfec_share_type?:'fixed'|'percentage';

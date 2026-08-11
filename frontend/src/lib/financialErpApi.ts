@@ -69,9 +69,19 @@ export const financialErpApi = {
   annexes:(id:number)=>invoke<{items:Attachment[]}>(`/api/v1/admin/financial/member-accounts/${id}/annexes`),
   addAnnex:(id:number,data:unknown)=>invoke(`/api/v1/admin/financial/member-accounts/${id}/annexes`,'POST',data),
   deleteAnnex:(id:number,annexId:number)=>invoke(`/api/v1/admin/financial/member-accounts/${id}/annexes/${annexId}`,'DELETE'),
-  statementGrid: (companyId:number, year:number, month:number) =>
-    invoke<{statement_id:number|null;status:string;period_start:string;period_end:string;received_at?:string;notes?:string;items:StatementGridRow[]}>(`/api/v1/admin/financial/statements/grid?company_id=${companyId}&accounting_year=${year}&accounting_month=${month}`),
-  saveStatement: (data:unknown) => invoke<{statement_id:number;status:string;saved:number}>('/api/v1/admin/financial/statements/bulk','PUT',data),
+  statementGrid: (companyId:number, year:number, month:number, filters?:{member_id?:number;pricing_item_id?:number}) =>
+    invoke<{statement_id:number|null;status:string;period_start:string;period_end:string;received_at?:string;notes?:string;items:StatementGridRow[];row_count?:number}>(
+      `/api/v1/admin/financial/monthly-statements/grid?${qs({
+        // Never send /statements/grid — it is shadowed by GET /statements/{member_id} ("grid" → 422).
+        // Omit unused filters entirely (no "", "all", or Number("")===0).
+        company_id: companyId > 0 ? companyId : undefined,
+        accounting_year: year > 0 ? year : undefined,
+        accounting_month: month >= 1 && month <= 12 ? month : undefined,
+        member_id: filters?.member_id && filters.member_id > 0 ? filters.member_id : undefined,
+        pricing_item_id: filters?.pricing_item_id && filters.pricing_item_id > 0 ? filters.pricing_item_id : undefined,
+      })}`,
+    ),
+  saveStatement: (data:unknown) => invoke<{statement_id:number;status:string;saved:number;failed?:number;failures?:{account_item_id:number;error:string;member_name?:string;pricing_item?:string}[]}>('/api/v1/admin/financial/statements/bulk','PUT',data),
   approveStatement: (id:number) => invoke(`/api/v1/admin/financial/statements/${id}/approve`,'POST'),
   reopenStatement: (id:number,reason:string) => invoke(`/api/v1/admin/financial/statements/${id}/reopen`,'POST',{reason}),
   statementAttachments:(id:number)=>invoke<{items:Attachment[]}>(`/api/v1/admin/financial/statements/${id}/attachments`),
