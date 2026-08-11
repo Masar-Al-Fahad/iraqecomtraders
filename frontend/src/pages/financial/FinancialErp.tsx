@@ -41,7 +41,7 @@ export default function FinancialErp(){
 
   useEffect(()=>{(async()=>{try{
     const access=await financialErpApi.access();setPermissions(access.permissions||{});setSuperAdmin(access.is_super_admin);
-    const [cmp,svc]=await Promise.all([financialErpApi.companies(),financialErpApi.serviceTypes()]);
+    const [cmp,svc]=await Promise.all([financialErpApi.companies(),financialErpApi.serviceTypes(true)]);
     setCompanies(cmp.items);setServices(svc.items);setReady(true);
   }catch(e:any){if(e?.status===401||e?.status===403)setDenied(true);else notify(e)}})()},[]);
 

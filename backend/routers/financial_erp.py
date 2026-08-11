@@ -1,6 +1,7 @@
 """Professional financial ERP endpoints layered additively over the legacy API."""
 from __future__ import annotations
 
+import json
 from calendar import monthrange
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from dependencies.permissions import require_any_permission, require_permission
 from models.financial import (
-    CompanyAttachment, FinancialCompany, FinancialExpense, MemberAccountItem, MemberAnnex, MemberCompanyAccount,
-    MonthlyEntryLine, MonthlyStatement, PricingItem, PricingItemVersion,
+    CompanyAttachment, CompanyContract, FinancialCompany, FinancialExpense, MemberAccountItem, MemberAnnex,
+    MemberCompanyAccount, MonthlyEntryLine, MonthlyStatement, PricingItem, PricingItemVersion,
     ReceiptAllocation, RevenueReceipt, ServiceType, SettlementBatch, SettlementLine,
     SettlementReversal, StatementAttachment,
 )
@@ -128,38 +129,57 @@ class DocumentMetaIn(BaseModel):
     document_type: str = Field(default="contract", max_length=40)
     contract_id: int | None = None
     replaced_id: int | None = None
+
+
+class PrimaryContractIn(BaseModel):
+    contract_number: str | None = None
+    signed_at: date | None = None
+    effective_from: date
+    effective_to: date | None = None
+    notes: str | None = None
+
+
+class PricingStatusIn(BaseModel):
+    is_active: bool
     signed_at: date | None = None
 
 
 @router.get("/pricing-items")
 async def list_pricing_items(
     company_id: int,
+    include_inactive: bool = Query(False),
+    for_management: bool = Query(False),
     _user: UserResponse = Depends(require_any_permission(
         "financial.companies.view", "financial.pricing.manage", "financial.member_links.view", "financial.monthly.view"
     )),
     db: AsyncSession = Depends(get_db),
 ):
     today = date.today()
-    latest = select(
+    latest_base = select(
         PricingItemVersion.pricing_item_id, func.max(PricingItemVersion.version).label("version")
-    ).where(
-        PricingItemVersion.effective_from <= today,
-        or_(PricingItemVersion.effective_to.is_(None), PricingItemVersion.effective_to >= today),
-    ).group_by(PricingItemVersion.pricing_item_id).subquery()
-    rows = (await db.execute(
+    )
+    if not for_management:
+        latest_base = latest_base.where(
+            PricingItemVersion.effective_from <= today,
+            or_(PricingItemVersion.effective_to.is_(None), PricingItemVersion.effective_to >= today),
+        )
+    latest = latest_base.group_by(PricingItemVersion.pricing_item_id).subquery()
+    stmt = (
         select(PricingItem, PricingItemVersion)
-        .join(latest, latest.c.pricing_item_id == PricingItem.id)
-        .join(PricingItemVersion, and_(
+        .outerjoin(latest, latest.c.pricing_item_id == PricingItem.id)
+        .outerjoin(PricingItemVersion, and_(
             PricingItemVersion.pricing_item_id == latest.c.pricing_item_id,
             PricingItemVersion.version == latest.c.version,
         ))
         .where(
             PricingItem.company_id == company_id,
-            PricingItem.is_active.is_(True),
             PricingItem.deleted_at.is_(None),
         )
         .order_by(PricingItem.name)
-    )).all()
+    )
+    if not include_inactive and not for_management:
+        stmt = stmt.where(PricingItem.is_active.is_(True))
+    rows = (await db.execute(stmt)).all()
     return {"items": [{
         "id": item.id, "company_id": item.company_id, "name": item.name, "unit": item.unit,
         "is_active": item.is_active, "notes": item.notes,
@@ -170,6 +190,7 @@ async def list_pricing_items(
             "mfec_share_value": float(version.mfec_share_value),
             "effective_from": version.effective_from.isoformat(),
             "effective_to": version.effective_to.isoformat() if version.effective_to else None,
+            "notes": version.notes,
         },
     } for item, version in rows]}
 
@@ -253,6 +274,118 @@ async def delete_annex(
     actor=await resolve_actor_name(db,user);row.deleted_at=datetime.now();row.deleted_by=actor
     add_audit(db,action="annex.delete",entity_type="member_annex",entity_id=row.id,actor=actor)
     await db.commit();return {"id":row.id,"deleted":True}
+
+
+@router.patch("/pricing-items/{item_id}/status")
+async def set_pricing_item_status(
+    item_id: int,
+    data: PricingStatusIn,
+    user: UserResponse = Depends(require_permission("financial.pricing.manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(PricingItem, item_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(404, "فقرة التحاسب غير موجودة")
+    actor = await resolve_actor_name(db, user)
+    old = {"is_active": item.is_active}
+    item.is_active = data.is_active
+    add_audit(
+        db, action="pricing_item.status", entity_type="pricing_item", entity_id=item.id,
+        actor=actor, old_values=old, new_values={"is_active": data.is_active},
+    )
+    await db.commit()
+    return {"id": item.id, "is_active": item.is_active}
+
+
+@router.get("/companies/{company_id}/primary-contract")
+async def get_primary_contract(
+    company_id: int,
+    _user: UserResponse = Depends(require_any_permission(
+        "financial.companies.view", "financial.contracts.manage", "view_companies", "manage_companies_contracts",
+    )),
+    db: AsyncSession = Depends(get_db),
+):
+    company = await db.get(FinancialCompany, company_id)
+    if not company:
+        raise HTTPException(404, "الشركة غير موجودة")
+    contract = (await db.execute(
+        select(CompanyContract)
+        .where(CompanyContract.company_id == company_id)
+        .order_by(CompanyContract.version.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    meta = {}
+    if contract and contract.custom_config:
+        try:
+            meta = json.loads(contract.custom_config) or {}
+        except Exception:
+            meta = {}
+    return {
+        "company_id": company_id,
+        "contract_id": contract.id if contract else None,
+        "version": contract.version if contract else None,
+        "contract_number": meta.get("contract_number") or "",
+        "signed_at": meta.get("signed_at") or None,
+        "effective_from": (
+            contract.effective_from.isoformat() if contract and contract.effective_from
+            else (company.contract_start.isoformat() if company.contract_start else None)
+        ),
+        "effective_to": (
+            contract.effective_to.isoformat() if contract and contract.effective_to
+            else (company.contract_end.isoformat() if company.contract_end else None)
+        ),
+        "notes": (contract.notes if contract else None) or "",
+    }
+
+
+@router.put("/companies/{company_id}/primary-contract")
+async def upsert_primary_contract(
+    company_id: int,
+    data: PrimaryContractIn,
+    user: UserResponse = Depends(require_any_permission("manage_companies_contracts", "financial.contracts.manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    company = await db.get(FinancialCompany, company_id)
+    if not company:
+        raise HTTPException(404, "الشركة غير موجودة")
+    actor = await resolve_actor_name(db, user)
+    contract = (await db.execute(
+        select(CompanyContract)
+        .where(CompanyContract.company_id == company_id)
+        .order_by(CompanyContract.version.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    meta = {
+        "contract_number": (data.contract_number or "").strip() or None,
+        "signed_at": data.signed_at.isoformat() if data.signed_at else None,
+    }
+    if contract is None:
+        contract = CompanyContract(
+            company_id=company_id,
+            version=1,
+            commission_method="custom",
+            commission_value=Decimal("0"),
+            effective_from=data.effective_from,
+            effective_to=data.effective_to,
+            notes=data.notes,
+            custom_config=json.dumps(meta, ensure_ascii=False),
+            created_by=actor,
+        )
+        db.add(contract)
+    else:
+        contract.effective_from = data.effective_from
+        contract.effective_to = data.effective_to
+        contract.notes = data.notes
+        contract.custom_config = json.dumps(meta, ensure_ascii=False)
+    company.contract_start = data.effective_from
+    company.contract_end = data.effective_to
+    await db.flush()
+    add_audit(
+        db, action="primary_contract.upsert", entity_type="contract", entity_id=contract.id,
+        actor=actor, new_values=data.model_dump(),
+    )
+    await db.commit()
+    return {"id": contract.id, "version": contract.version}
 
 
 @router.post("/pricing-items/{item_id}/versions")

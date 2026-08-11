@@ -39,13 +39,25 @@ async function openDocument(objectKey:string,filename?:string){
 
 export const financialErpApi = {
   access: () => invoke<FinancialAccess>('/api/v1/admin/financial/access'),
-  serviceTypes:()=>invoke<{items:ServiceType[]}>('/api/v1/admin/financial/service-types'),
+  serviceTypes:(ensureCanonical=false)=>invoke<{items:ServiceType[]}>(`/api/v1/admin/financial/service-types${ensureCanonical?'?ensure_canonical=true':''}`),
+  createServiceType:(data:unknown)=>invoke<{id:number;name:string;code:string}>('/api/v1/admin/financial/service-types','POST',data),
   companies: () => invoke<{items:Company[]}>('/api/v1/admin/financial/companies'),
   saveCompany:(data:unknown,id?:number)=>invoke<{id:number}>(id?`/api/v1/admin/financial/companies/${id}`:'/api/v1/admin/financial/companies',id?'PUT':'POST',data),
-  pricingItems: (companyId:number) => invoke<{items:PricingItem[]}>(`/api/v1/admin/financial/pricing-items?company_id=${companyId}`),
+  pricingItems: (companyId:number, opts:{includeInactive?:boolean;forManagement?:boolean}={}) =>
+    invoke<{items:PricingItem[]}>(`/api/v1/admin/financial/pricing-items?${qs({
+      company_id:companyId,
+      include_inactive:opts.includeInactive?true:undefined,
+      for_management:opts.forManagement?true:undefined,
+    })}`),
   createPricingItem: (companyId:number, data:unknown) => invoke(`/api/v1/admin/financial/companies/${companyId}/pricing-items`, 'POST', data),
   createPricingVersion:(itemId:number,data:unknown)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}/versions`,'POST',data),
   pricingVersions:(itemId:number)=>invoke<{items:any[]}>(`/api/v1/admin/financial/pricing-items/${itemId}/versions`),
+  setPricingItemStatus:(itemId:number,is_active:boolean)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}/status`,'PATCH',{is_active}),
+  primaryContract:(companyId:number)=>invoke<{
+    company_id:number;contract_id:number|null;version:number|null;contract_number:string;signed_at:string|null;
+    effective_from:string|null;effective_to:string|null;notes:string;
+  }>(`/api/v1/admin/financial/companies/${companyId}/primary-contract`),
+  savePrimaryContract:(companyId:number,data:unknown)=>invoke(`/api/v1/admin/financial/companies/${companyId}/primary-contract`,'PUT',data),
   companyAttachments:(companyId:number)=>invoke<{items:Attachment[]}>(`/api/v1/admin/financial/companies/${companyId}/attachments`),
   addCompanyAttachment:(companyId:number,data:unknown)=>invoke(`/api/v1/admin/financial/companies/${companyId}/attachments`,'POST',data),
   deleteCompanyAttachment:(companyId:number,id:number)=>invoke(`/api/v1/admin/financial/companies/${companyId}/attachments/${id}`,'DELETE'),

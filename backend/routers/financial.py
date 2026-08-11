@@ -293,8 +293,18 @@ async def financial_access(
     }
 
 
+CANONICAL_SERVICE_TYPES = (
+    ("shipping", "شحن", "fixed_per_operation", Decimal("3000")),
+    ("delivery", "توصيل", "fixed_per_operation", Decimal("500")),
+    ("design", "تصاميم", None, None),
+    ("sorting", "فرز", None, None),
+    ("other", "أخرى", None, None),
+)
+
+
 @router.get("/service-types")
 async def list_service_types(
+    ensure_canonical: bool = Query(False),
     _user: UserResponse = Depends(require_any_permission(
         "monthly_entry", "view_companies", "manage_companies_contracts",
         "financial.monthly.view", "financial.monthly.enter", "financial.companies.view",
@@ -302,6 +312,29 @@ async def list_service_types(
     )),
     db: AsyncSession = Depends(get_db),
 ):
+    if ensure_canonical:
+        existing = {
+            row.code: row
+            for row in (await db.execute(select(ServiceType))).scalars().all()
+        }
+        changed = False
+        for code, name, method, value in CANONICAL_SERVICE_TYPES:
+            row = existing.get(code)
+            if row is None:
+                db.add(ServiceType(
+                    code=code,
+                    name=name,
+                    is_active=True,
+                    default_commission_method=method,
+                    default_commission_value=value,
+                ))
+                changed = True
+            elif row.name != name or not row.is_active:
+                row.name = name
+                row.is_active = True
+                changed = True
+        if changed:
+            await db.commit()
     rows = (await db.execute(select(ServiceType).order_by(ServiceType.name))).scalars().all()
     return {"items": [{
         "id": x.id, "name": x.name, "code": x.code, "is_active": x.is_active,
@@ -390,27 +423,29 @@ async def create_company(
     service_type = await db.get(ServiceType, data.service_type_id)
     if not service_type:
         raise HTTPException(404, "نوع الخدمة غير موجود")
-    item = FinancialCompany(**data.model_dump())
+    payload = data.model_dump()
+    if not payload.get("contract_start") and payload.get("cooperation_started_at"):
+        payload["contract_start"] = payload["cooperation_started_at"]
+    item = FinancialCompany(**payload)
     db.add(item)
     await db.flush()
-    if (
-        service_type.default_commission_method
-        and service_type.default_commission_value is not None
-    ):
-        db.add(
-            CompanyContract(
-                company_id=item.id,
-                version=1,
-                commission_method=service_type.default_commission_method,
-                commission_value=service_type.default_commission_value,
-                effective_from=data.contract_start or date.today(),
-                notes="عقد ابتدائي من إعدادات نوع الخدمة؛ يمكن استبداله بنسخة جديدة",
-                created_by=actor,
-            )
+    effective_from = payload.get("contract_start") or date.today()
+    db.add(
+        CompanyContract(
+            company_id=item.id,
+            version=1,
+            commission_method=service_type.default_commission_method or "custom",
+            commission_value=service_type.default_commission_value or Decimal("0"),
+            effective_from=effective_from,
+            effective_to=payload.get("contract_end"),
+            notes="عقد أساسي ابتدائي — يمكن استكمال بياناته ومرفقاته من تفاصيل الشركة",
+            custom_config=json.dumps({"contract_number": None, "signed_at": None}, ensure_ascii=False),
+            created_by=actor,
         )
-    add_audit(db, action="create", entity_type="company", entity_id=item.id, actor=actor, new_values=data.model_dump())
+    )
+    add_audit(db, action="create", entity_type="company", entity_id=item.id, actor=actor, new_values=payload)
     await db.commit()
-    return {"id": item.id}
+    return {"id": item.id, "name": item.name, "service_type_id": item.service_type_id}
 
 
 @router.put("/companies/{company_id}")

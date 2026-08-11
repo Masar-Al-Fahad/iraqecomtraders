@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Edit3, ExternalLink, Eye, FileText, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Download, Edit3, ExternalLink, Eye, FileText, History, Plus, Trash2 } from 'lucide-react';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,88 +12,465 @@ import type { AccountItem, Attachment, Company, MemberAccount, MemberOption, Pri
 import { CompactTable, Empty, FileButton, FormDialog, PageTitle, SafeDateInput, SearchBox, StatusBadge, money } from './FinancialUi';
 
 type Common={companies:Company[];services:ServiceType[];reloadCompanies:()=>Promise<void>;can:(key:string)=>boolean;notify:(e:unknown)=>void;success:(message:string)=>void};
+
 const date=()=>new Date().toISOString().slice(0,10);
-const blankCompany={name:'',service_type_id:'',owner_name:'',address:'',mobile:'',contact_info:'',cooperation_started_at:'',cooperation_status:'active',status:'active',contract_start:'',contract_end:'',notes:''};
+
+const ACTIVITY_OPTIONS=[
+  {code:'shipping',label:'شحن'},
+  {code:'delivery',label:'توصيل'},
+  {code:'design',label:'تصاميم'},
+  {code:'sorting',label:'فرز'},
+  {code:'other',label:'أخرى'},
+] as const;
+
+type ActivityCode=typeof ACTIVITY_OPTIONS[number]['code'];
+
+const blankCompany={
+  name:'',activity_code:'' as ActivityCode|'',other_activity:'',owner_name:'',address:'',mobile:'',
+  contact_info:'',cooperation_started_at:'',cooperation_status:'active',status:'active',notes:'',
+};
 const blankPrice={name:'',unit:'',company_unit_price:'',mfec_share_type:'fixed',mfec_share_value:'',effective_from:date(),effective_to:'',notes:''};
+const blankContract={contract_number:'',signed_at:'',effective_from:date(),effective_to:'',notes:''};
+
+function Field({label,children,className='',error}:{label:string;children:React.ReactNode;className?:string;error?:string}){
+  return <div className={className}>
+    <Label className="mb-1 block">{label}</Label>
+    {children}
+    {error?<p className="text-xs text-red-600 mt-1">{error}</p>:null}
+  </div>;
+}
+
+function slugifyArabic(value:string){
+  const ascii=value.trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+  return ascii || `custom_${Date.now()}`;
+}
+
+async function resolveServiceTypeId(services:ServiceType[],activityCode:ActivityCode,otherActivity:string){
+  const ensured=(await financialErpApi.serviceTypes(true)).items;
+  if(activityCode!=='other'){
+    const found=ensured.find(s=>s.code===activityCode)||ensured.find(s=>s.name===ACTIVITY_OPTIONS.find(o=>o.code===activityCode)?.label);
+    if(!found)throw new Error('تعذر تجهيز نوع الخدمة المحدد. أعد تحميل الصفحة ثم حاول مجددًا.');
+    return {serviceTypeId:found.id,services:ensured};
+  }
+  const customName=otherActivity.trim();
+  if(customName.length<2)throw new Error('اكتب نوع النشاط عند اختيار «أخرى».');
+  const existing=ensured.find(s=>s.name===customName);
+  if(existing)return {serviceTypeId:existing.id,services:ensured};
+  const created=await financialErpApi.createServiceType({name:customName,code:`other_${slugifyArabic(customName)}`.slice(0,64),is_active:true});
+  return {serviceTypeId:created.id,services:[...ensured,created as ServiceType]};
+}
 
 export function CompaniesPage({companies,services,reloadCompanies,can,notify,success}:Common){
-  const [search,setSearch]=useState('');const [status,setStatus]=useState('all');
-  const [companyOpen,setCompanyOpen]=useState(false);const [selected,setSelected]=useState<Company>();
-  const [form,setForm]=useState<any>(blankCompany);const [pricing,setPricing]=useState<PricingItem[]>([]);
-  const [priceOpen,setPriceOpen]=useState(false);const [editPrice,setEditPrice]=useState<PricingItem>();
-  const [priceForm,setPriceForm]=useState<any>(blankPrice);const [priceHistory,setPriceHistory]=useState<any[]>([]);const [attachments,setAttachments]=useState<Attachment[]>([]);const [savingCompany,setSavingCompany]=useState(false);
+  const [localServices,setLocalServices]=useState(services);
+  const [search,setSearch]=useState('');
+  const [status,setStatus]=useState('all');
+  const [createOpen,setCreateOpen]=useState(false);
+  const [editingId,setEditingId]=useState<number|undefined>();
+  const [form,setForm]=useState({...blankCompany});
+  const [errors,setErrors]=useState<Record<string,string>>({});
+  const [savingCompany,setSavingCompany]=useState(false);
+  const [expanded,setExpanded]=useState<string>('');
+  const [details,setDetails]=useState<Record<number,{
+    pricing:PricingItem[];attachments:Attachment[];contract:typeof blankContract;loading:boolean;
+  }>>({});
+  const [priceOpen,setPriceOpen]=useState(false);
+  const [priceCompanyId,setPriceCompanyId]=useState<number>();
+  const [editPrice,setEditPrice]=useState<PricingItem>();
+  const [priceForm,setPriceForm]=useState({...blankPrice});
+  const [priceHistory,setPriceHistory]=useState<any[]>([]);
+  const [historyOpen,setHistoryOpen]=useState(false);
+  const [savingPrice,setSavingPrice]=useState(false);
+  const [savingContract,setSavingContract]=useState<number|null>(null);
+
+  useEffect(()=>{setLocalServices(services)},[services]);
+  useEffect(()=>{(async()=>{try{setLocalServices((await financialErpApi.serviceTypes(true)).items)}catch(e){notify(e)}})()},[]);
+
   const filtered=useMemo(()=>companies.filter(x=>(status==='all'||x.cooperation_status===status)&&
-    [x.name,x.service_type_name,x.owner_name,x.mobile].some(v=>v?.toLowerCase().includes(search.toLowerCase()))),[companies,search,status]);
-  const openCompany=async(company?:Company)=>{
-    setSelected(company);setForm(company?{...blankCompany,...company,service_type_id:String(company.service_type_id)}:blankCompany);
-    setCompanyOpen(true);if(company)await Promise.all([
-      financialErpApi.pricingItems(company.id).then(x=>setPricing(x.items)),
-      financialErpApi.companyAttachments(company.id).then(x=>setAttachments(x.items)),
-    ]).catch(notify);else{setPricing([]);setAttachments([])}
+    [x.name,x.service_type_name,x.owner_name,x.mobile].some(v=>String(v||'').toLowerCase().includes(search.toLowerCase()))),
+  [companies,search,status]);
+
+  const validateCompany=()=>{
+    const next:Record<string,string>={};
+    if(form.name.trim().length<2)next.name='اسم الشركة مطلوب ويجب أن يتكون من حرفين على الأقل';
+    if(!form.activity_code)next.activity_code='اختر نوع الخدمة / النشاط';
+    if(form.activity_code==='other'&&form.other_activity.trim().length<2)next.other_activity='اكتب نوع النشاط عند اختيار «أخرى»';
+    if(!form.owner_name.trim())next.owner_name='اسم صاحب الشركة مطلوب';
+    if(!form.mobile.trim())next.mobile='رقم الهاتف مطلوب';
+    if(!form.address.trim())next.address='عنوان الشركة مطلوب';
+    if(!form.cooperation_started_at)next.cooperation_started_at='تاريخ التعاون مطلوب';
+    setErrors(next);
+    return Object.keys(next).length===0;
   };
-  const saveCompany=async()=>{if(form.name.trim().length<2){notify(new Error('اسم الشركة مطلوب ويجب أن يتكون من حرفين على الأقل'));return}if(!form.service_type_id){notify(new Error('اختر نشاط الشركة / نوع الخدمة'));return}
-    if(!form.owner_name?.trim()){notify(new Error('اسم مالك الشركة مطلوب'));return}if(!form.address?.trim()){notify(new Error('عنوان الشركة مطلوب'));return}
-    if(!form.mobile?.trim()){notify(new Error('رقم هاتف الشركة مطلوب'));return}if(!form.cooperation_started_at){notify(new Error('تاريخ بدء التعاون مطلوب'));return}
-    if(!form.notes?.trim()){notify(new Error('ملاحظات الشركة مطلوبة'));return}setSavingCompany(true);try{
-    const saved=await financialErpApi.saveCompany({...form,service_type_id:Number(form.service_type_id),
-      cooperation_started_at:form.cooperation_started_at||null,contract_start:form.contract_start||null,contract_end:form.contract_end||null},selected?.id);
-    const reloaded=(await financialErpApi.companies()).items;if(!reloaded.some(company=>company.id===saved.id))throw new Error('أعاد الخادم نجاح الحفظ لكن الشركة لم تظهر بعد إعادة تحميل قاعدة البيانات');
-    await reloadCompanies();setCompanyOpen(false);success(selected?'تم تحديث بيانات الشركة والتحقق من حفظها':'تم إنشاء الشركة والتحقق من حفظها في قاعدة البيانات');
-  }catch(e){notify(e)}finally{setSavingCompany(false)}};
-  const savePrice=async()=>{if(!selected)return;if(!priceForm.name?.trim()&&!editPrice){notify(new Error('اسم فقرة التحاسب مطلوب'));return}if(!priceForm.unit?.trim()&&!editPrice){notify(new Error('وحدة القياس مطلوبة'));return}if(priceForm.company_unit_price===''||priceForm.mfec_share_value===''){notify(new Error('أدخل سعر الشركة وقيمة حصة MFEC'));return}try{
-    const payload={...priceForm,company_unit_price:Number(priceForm.company_unit_price),mfec_share_value:Number(priceForm.mfec_share_value),effective_to:priceForm.effective_to||null};
-    if(editPrice)await financialErpApi.createPricingVersion(editPrice.id,{...payload,name:editPrice.name,unit:editPrice.unit});
-    else await financialErpApi.createPricingItem(selected.id,payload);
-    setPricing((await financialErpApi.pricingItems(selected.id)).items);setPriceOpen(false);success(editPrice?'تم إنشاء نسخة سعر تاريخية جديدة':'تمت إضافة فقرة التحاسب');
-  }catch(e){notify(e)}};
-  const uploadAttachment=async(file:File,replacedId?:number)=>{if(!selected)return;try{
-    const up=await financialErpApi.upload('contracts',file);
-    await financialErpApi.addCompanyAttachment(selected.id,{...up,original_filename:file.name,mime_type:file.type,size_bytes:file.size,document_type:'contract',replaced_id:replacedId||null});
-    setAttachments((await financialErpApi.companyAttachments(selected.id)).items);
-  }catch(e){notify(e)}};
+
+  const openCreate=()=>{setEditingId(undefined);setForm({...blankCompany});setErrors({});setCreateOpen(true)};
+
+  const saveCompany=async()=>{
+    if(!validateCompany()){notify(new Error('أكمل الحقول الإلزامية الموضحة تحت النموذج'));return}
+    const allowed=editingId
+      ?(can('financial.companies.edit')||can('manage_companies_contracts'))
+      :(can('financial.companies.create')||can('manage_companies_contracts'));
+    if(!allowed){notify(new Error(editingId?'ليست لديك صلاحية تعديل الشركة':'ليست لديك صلاحية إضافة شركة'));return}
+    setSavingCompany(true);
+    try{
+      const {serviceTypeId,services:ensured}=await resolveServiceTypeId(localServices,form.activity_code as ActivityCode,form.other_activity);
+      setLocalServices(ensured);
+      const payload={
+        name:form.name.trim(),
+        service_type_id:serviceTypeId,
+        owner_name:form.owner_name.trim(),
+        mobile:form.mobile.trim(),
+        address:form.address.trim(),
+        contact_info:form.contact_info.trim()||null,
+        cooperation_started_at:form.cooperation_started_at,
+        cooperation_status:form.cooperation_status,
+        status:form.status,
+        notes:form.notes.trim()||null,
+        contract_start:form.cooperation_started_at,
+      };
+      const saved=await financialErpApi.saveCompany(payload,editingId);
+      const reloaded=(await financialErpApi.companies()).items;
+      const persisted=reloaded.find(c=>c.id===saved.id);
+      if(!persisted)throw new Error('أعاد الخادم نجاح الحفظ لكن الشركة لم تظهر بعد إعادة التحميل');
+      await reloadCompanies();
+      setCreateOpen(false);
+      setEditingId(undefined);
+      setExpanded(String(saved.id));
+      success(editingId?`تم تحديث الشركة «${persisted.name}» بنجاح`:`تم حفظ الشركة «${persisted.name}» بنجاح`);
+      await loadDetails(saved.id);
+    }catch(e){notify(e)}finally{setSavingCompany(false)}
+  };
+
+  const loadDetails=async(companyId:number)=>{
+    setDetails(prev=>({...prev,[companyId]:{...(prev[companyId]||{pricing:[],attachments:[],contract:{...blankContract}}),loading:true}}));
+    try{
+      const [pricing,attachments,contract]=await Promise.all([
+        financialErpApi.pricingItems(companyId,{includeInactive:true,forManagement:true}),
+        financialErpApi.companyAttachments(companyId),
+        financialErpApi.primaryContract(companyId),
+      ]);
+      setDetails(prev=>({...prev,[companyId]:{
+        loading:false,
+        pricing:pricing.items,
+        attachments:attachments.items,
+        contract:{
+          contract_number:contract.contract_number||'',
+          signed_at:contract.signed_at||'',
+          effective_from:contract.effective_from||date(),
+          effective_to:contract.effective_to||'',
+          notes:contract.notes||'',
+        },
+      }}));
+    }catch(e){
+      setDetails(prev=>({...prev,[companyId]:{...(prev[companyId]||{pricing:[],attachments:[],contract:{...blankContract}}),loading:false}}));
+      notify(e);
+    }
+  };
+
+  const onAccordionChange=async(value:string)=>{
+    setExpanded(value);
+    if(value)await loadDetails(Number(value));
+  };
+
+  const saveContract=async(companyId:number)=>{
+    const contract=details[companyId]?.contract;
+    if(!contract?.effective_from){notify(new Error('تاريخ بداية العقد مطلوب'));return}
+    setSavingContract(companyId);
+    try{
+      await financialErpApi.savePrimaryContract(companyId,{
+        contract_number:contract.contract_number||null,
+        signed_at:contract.signed_at||null,
+        effective_from:contract.effective_from,
+        effective_to:contract.effective_to||null,
+        notes:contract.notes||null,
+      });
+      await loadDetails(companyId);
+      success('تم حفظ بيانات العقد الأساسي');
+    }catch(e){notify(e)}finally{setSavingContract(null)}
+  };
+
+  const uploadAttachment=async(companyId:number,file:File,replacedId?:number)=>{
+    try{
+      const up=await financialErpApi.upload('contracts',file);
+      await financialErpApi.addCompanyAttachment(companyId,{
+        ...up,original_filename:file.name,mime_type:file.type||'application/octet-stream',
+        size_bytes:file.size,document_type:'contract',replaced_id:replacedId||null,
+      });
+      await loadDetails(companyId);
+      success(replacedId?'تم استبدال المرفق':'تم رفع مرفق العقد');
+    }catch(e){notify(e)}
+  };
+
+  const openPriceDialog=(companyId:number,item?:PricingItem)=>{
+    setPriceCompanyId(companyId);
+    setEditPrice(item);
+    setPriceForm(item?{
+      ...blankPrice,
+      name:item.name,
+      unit:item.unit,
+      company_unit_price:String(item.current_version?.company_unit_price??''),
+      mfec_share_type:item.current_version?.mfec_share_type||'fixed',
+      mfec_share_value:String(item.current_version?.mfec_share_value??''),
+      effective_from:date(),
+      effective_to:'',
+      notes:item.notes||'',
+    }:{...blankPrice});
+    setPriceOpen(true);
+  };
+
+  const savePrice=async()=>{
+    if(!priceCompanyId)return;
+    if(!editPrice&&!priceForm.name.trim()){notify(new Error('اسم الفقرة مطلوب'));return}
+    if(!editPrice&&!priceForm.unit.trim()){notify(new Error('الوحدة مطلوبة'));return}
+    if(priceForm.company_unit_price===''||Number.isNaN(Number(priceForm.company_unit_price))){notify(new Error('سعر العميل مطلوب'));return}
+    if(priceForm.mfec_share_value===''||Number.isNaN(Number(priceForm.mfec_share_value))){notify(new Error('قيمة حصة التجمع مطلوبة'));return}
+    if(!priceForm.effective_from){notify(new Error('تاريخ بدء السعر مطلوب'));return}
+    setSavingPrice(true);
+    try{
+      const payload={
+        name:priceForm.name.trim(),
+        unit:priceForm.unit.trim(),
+        company_unit_price:Number(priceForm.company_unit_price),
+        mfec_share_type:priceForm.mfec_share_type,
+        mfec_share_value:Number(priceForm.mfec_share_value),
+        effective_from:priceForm.effective_from,
+        effective_to:priceForm.effective_to||null,
+        notes:priceForm.notes.trim()||null,
+      };
+      if(editPrice)await financialErpApi.createPricingVersion(editPrice.id,{...payload,name:editPrice.name,unit:editPrice.unit});
+      else await financialErpApi.createPricingItem(priceCompanyId,payload);
+      await loadDetails(priceCompanyId);
+      setPriceOpen(false);
+      success(editPrice?'تم إنشاء نسخة سعر جديدة دون تعديل النسخ السابقة':'تمت إضافة فقرة التحاسب');
+    }catch(e){notify(e)}finally{setSavingPrice(false)}
+  };
+
+  const showHistory=async(item:PricingItem)=>{
+    try{
+      setEditPrice(item);
+      setPriceHistory((await financialErpApi.pricingVersions(item.id)).items);
+      setHistoryOpen(true);
+    }catch(e){notify(e)}
+  };
+
+  const canCreate=can('financial.companies.create')||can('manage_companies_contracts');
+  const canEdit=can('financial.companies.edit')||can('manage_companies_contracts');
+  const canContracts=can('financial.contracts.manage')||can('manage_companies_contracts');
+  const canPricing=can('financial.pricing.manage')||can('manage_companies_contracts');
+
   return <div className="space-y-4">
-    <PageTitle title="الشركات والعقود" description="ملف الشركة، فقرات التحاسب المؤرخة، ونسخ العقود الأصلية."
-      actions={can('financial.companies.create')&&<Button onClick={()=>openCompany()}><Plus className="w-4 h-4 ml-2"/>شركة جديدة</Button>}/>
-    <Card><CardContent className="p-3 flex gap-2 flex-wrap"><SearchBox value={search} onChange={setSearch} placeholder="اسم الشركة، المالك، الهاتف..."/>
-      <select className="h-10 border rounded-md px-3 bg-white" value={status} onChange={e=>setStatus(e.target.value)}><option value="all">كل الحالات</option><option value="active">متعاون</option><option value="suspended">معلق</option><option value="ended">منتهي</option></select>
-      <span className="text-sm text-slate-500 self-center">{filtered.length} شركة</span></CardContent></Card>
-    <CompactTable headers={['الشركة','الخدمة','المالك والاتصال','بدء التعاون','الحالة','الإجراءات']}>
-      {filtered.map(c=><tr key={c.id} className="border-t hover:bg-slate-50"><td className="p-3"><b>{c.name}</b><small className="block text-slate-500 max-w-64 truncate">{c.address||c.notes||'-'}</small></td>
-        <td>{c.service_type_name}</td><td>{c.owner_name||'-'}<small className="block">{c.mobile||'-'}</small></td><td>{c.cooperation_started_at||'-'}</td><td><StatusBadge value={c.cooperation_status}/></td>
-        <td className="p-2"><Button size="sm" variant="outline" onClick={()=>openCompany(c)}><Eye className="w-4 h-4 ml-1"/>فتح</Button></td></tr>)}
-      {!filtered.length&&<tr><td colSpan={6}><Empty/></td></tr>}
-    </CompactTable>
-    <FormDialog open={companyOpen} onOpenChange={setCompanyOpen} title={selected?`ملف شركة: ${selected.name}`:'إضافة شركة'} className="max-w-5xl">
-      <div className="grid md:grid-cols-3 gap-3">
-        <Field label="اسم الشركة *"><Input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
-        <Field label="نوع الخدمة / النشاط *"><select required className="w-full h-10 border rounded-md px-3" value={form.service_type_id} onChange={e=>setForm({...form,service_type_id:e.target.value})}><option value="">اختر نوع الخدمة</option>{services.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
-        <Field label="اسم المالك *"><Input required value={form.owner_name||''} onChange={e=>setForm({...form,owner_name:e.target.value})}/></Field>
-        <Field label="الهاتف *"><Input required value={form.mobile||''} onChange={e=>setForm({...form,mobile:e.target.value})}/></Field>
-        <Field label="تاريخ التعاون *"><SafeDateInput required value={form.cooperation_started_at||''} onChange={e=>setForm({...form,cooperation_started_at:e.target.value})}/></Field>
-        <Field label="حالة التعاون"><select className="w-full h-10 border rounded-md px-3" value={form.cooperation_status} onChange={e=>setForm({...form,cooperation_status:e.target.value})}><option value="active">متعاون</option><option value="suspended">معلق</option><option value="ended">منتهي</option></select></Field>
-        <Field label="العنوان *" className="md:col-span-2"><Input required value={form.address||''} onChange={e=>setForm({...form,address:e.target.value})}/></Field>
-        <Field label="الحالة النظامية"><select className="w-full h-10 border rounded-md px-3" value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option value="active">فعال</option><option value="inactive">غير فعال</option></select></Field>
-        <Field label="معلومات الاتصال" className="md:col-span-3"><Textarea value={form.contact_info||''} onChange={e=>setForm({...form,contact_info:e.target.value})}/></Field>
-        <Field label="ملاحظات *" className="md:col-span-3"><Textarea required value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})}/></Field>
+    <PageTitle
+      title="الشركات والعقود"
+      description="إنشاء الشركة أولًا، ثم إدارة العقد الأساسي وفقرات التحاسب من تفاصيل كل شركة."
+      actions={canCreate&&<Button type="button" onClick={openCreate}><Plus className="w-4 h-4 ml-2"/>شركة جديدة</Button>}
+    />
+
+    <Card><CardContent className="p-3 flex gap-2 flex-wrap">
+      <SearchBox value={search} onChange={setSearch} placeholder="اسم الشركة، المالك، الهاتف..."/>
+      <select className="h-10 border rounded-md px-3 bg-white" value={status} onChange={e=>setStatus(e.target.value)}>
+        <option value="all">كل حالات التعاون</option>
+        <option value="active">فعال</option>
+        <option value="suspended">موقوف</option>
+        <option value="ended">منتهي</option>
+      </select>
+      <span className="text-sm text-slate-500 self-center">{filtered.length} شركة</span>
+    </CardContent></Card>
+
+    {!filtered.length&&<Empty title="لا توجد شركات" description="أضف شركة جديدة من الزر أعلاه."/>}
+
+    <Accordion type="single" collapsible value={expanded} onValueChange={value=>void onAccordionChange(value)} className="space-y-3">
+      {filtered.map(company=>{
+        const detail=details[company.id];
+        return <AccordionItem key={company.id} value={String(company.id)} className="border rounded-xl bg-white px-4">
+          <AccordionTrigger className="hover:no-underline py-4">
+            <div className="flex flex-1 flex-col md:flex-row md:items-center md:justify-between gap-2 text-right">
+              <div>
+                <b className="text-base">{company.name}</b>
+                <small className="block text-slate-500">{company.service_type_name} · {company.owner_name||'بدون مالك'} · {company.mobile||'-'}</small>
+              </div>
+              <div className="flex items-center gap-2 justify-end">
+                <StatusBadge value={company.cooperation_status}/>
+                <StatusBadge value={company.status}/>
+                <span className="text-xs text-slate-500 inline-flex items-center"><ChevronDown className="w-4 h-4 ml-1"/>تفاصيل الشركة</span>
+              </div>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent className="pb-5 space-y-4">
+            {detail?.loading&&<p className="text-sm text-slate-500">جاري تحميل تفاصيل الشركة...</p>}
+            {!detail?.loading&&<>
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-base">بيانات الشركة</CardTitle></CardHeader>
+                <CardContent className="grid md:grid-cols-3 gap-3 text-sm">
+                  <div><small className="text-slate-500 block">نوع الخدمة</small><b>{company.service_type_name}</b></div>
+                  <div><small className="text-slate-500 block">صاحب الشركة</small><b>{company.owner_name||'-'}</b></div>
+                  <div><small className="text-slate-500 block">الهاتف</small><b>{company.mobile||'-'}</b></div>
+                  <div className="md:col-span-2"><small className="text-slate-500 block">العنوان</small><b>{company.address||'-'}</b></div>
+                  <div><small className="text-slate-500 block">تاريخ التعاون</small><b>{company.cooperation_started_at||'-'}</b></div>
+                  <div className="md:col-span-3"><small className="text-slate-500 block">معلومات الاتصال</small><b>{company.contact_info||'-'}</b></div>
+                  <div className="md:col-span-3"><small className="text-slate-500 block">ملاحظات</small><b>{company.notes||'-'}</b></div>
+                  {canEdit&&<div className="md:col-span-3"><Button type="button" variant="outline" size="sm" onClick={()=>{
+                    const code=(ACTIVITY_OPTIONS.find(o=>o.label===company.service_type_name)?.code
+                      ||localServices.find(s=>s.id===company.service_type_id)?.code
+                      ||'other') as ActivityCode;
+                    setEditingId(company.id);
+                    setForm({
+                      name:company.name,
+                      activity_code:ACTIVITY_OPTIONS.some(o=>o.code===code)?code:'other',
+                      other_activity:ACTIVITY_OPTIONS.some(o=>o.label===company.service_type_name)?'':(company.service_type_name||''),
+                      owner_name:company.owner_name||'',
+                      address:company.address||'',
+                      mobile:company.mobile||'',
+                      contact_info:company.contact_info||'',
+                      cooperation_started_at:company.cooperation_started_at||'',
+                      cooperation_status:company.cooperation_status||'active',
+                      status:company.status||'active',
+                      notes:company.notes||'',
+                    });
+                    setErrors({});
+                    setCreateOpen(true);
+                  }}>تعديل بيانات الشركة</Button></div>}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
+                  <CardTitle className="text-base">العقد الأساسي مع مسار الفهد</CardTitle>
+                  {canContracts&&<FileButton label="رفع مرفق" onFile={file=>uploadAttachment(company.id,file)}/>}
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <Field label="رقم العقد"><Input value={detail?.contract.contract_number||''} onChange={e=>setDetails(prev=>({...prev,[company.id]:{...prev[company.id],contract:{...prev[company.id].contract,contract_number:e.target.value}}}))}/></Field>
+                    <Field label="تاريخ التوقيع"><SafeDateInput value={detail?.contract.signed_at||''} onChange={e=>setDetails(prev=>({...prev,[company.id]:{...prev[company.id],contract:{...prev[company.id].contract,signed_at:e.target.value}}}))}/></Field>
+                    <Field label="تاريخ بداية العقد *"><SafeDateInput value={detail?.contract.effective_from||''} onChange={e=>setDetails(prev=>({...prev,[company.id]:{...prev[company.id],contract:{...prev[company.id].contract,effective_from:e.target.value}}}))}/></Field>
+                    <Field label="تاريخ النهاية (اختياري)"><SafeDateInput value={detail?.contract.effective_to||''} onChange={e=>setDetails(prev=>({...prev,[company.id]:{...prev[company.id],contract:{...prev[company.id].contract,effective_to:e.target.value}}}))}/></Field>
+                    <Field label="ملاحظات العقد" className="md:col-span-2"><Textarea value={detail?.contract.notes||''} onChange={e=>setDetails(prev=>({...prev,[company.id]:{...prev[company.id],contract:{...prev[company.id].contract,notes:e.target.value}}}))}/></Field>
+                  </div>
+                  {canContracts&&<Button type="button" disabled={savingContract===company.id} onClick={()=>void saveContract(company.id)}>{savingContract===company.id?'جاري الحفظ...':'حفظ بيانات العقد'}</Button>}
+                  <div className="space-y-2">
+                    <h4 className="font-semibold text-sm">مرفقات العقد (PDF / Word / Excel / صور)</h4>
+                    {!detail?.attachments?.length&&<Empty title="لا توجد مرفقات" description="يمكن رفع أكثر من ملف للعقد وملف الأسعار."/>}
+                    {detail?.attachments?.map(a=><div key={a.id} className="border rounded-lg p-2 flex justify-between items-center gap-2">
+                      <span className="text-sm"><FileText className="w-4 h-4 inline ml-2"/>{a.original_filename}<small className="block text-slate-500">{a.uploaded_at||''}</small></span>
+                      <div className="flex items-center">
+                        <Button type="button" size="icon" variant="ghost" onClick={()=>financialErpApi.openDocument(a.object_key)}><Eye className="w-4 h-4"/></Button>
+                        <Button type="button" size="icon" variant="ghost" onClick={()=>financialErpApi.openDocument(a.object_key,a.original_filename)}><Download className="w-4 h-4"/></Button>
+                        {canContracts&&<FileButton label="استبدال" onFile={file=>uploadAttachment(company.id,file,a.id)}/>}
+                        {canContracts&&<Button type="button" size="icon" variant="ghost" onClick={async()=>{await financialErpApi.deleteCompanyAttachment(company.id,a.id);await loadDetails(company.id);success('تم حذف المرفق منطقيًا')}}><Trash2 className="w-4 h-4 text-red-600"/></Button>}
+                      </div>
+                    </div>)}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
+                  <CardTitle className="text-base">فقرات التحاسب والأسعار</CardTitle>
+                  {canPricing&&<Button type="button" size="sm" onClick={()=>openPriceDialog(company.id)}><Plus className="w-4 h-4 ml-1"/>إضافة فقرة</Button>}
+                </CardHeader>
+                <CardContent>
+                  <CompactTable headers={['الفقرة','الوحدة','سعر العميل','نوع حصة MFEC','قيمة الحصة','بدء السعر','النهاية','الحالة','']}>
+                    {(detail?.pricing||[]).map(p=>{
+                      const v=p.current_version;
+                      return <tr key={p.id} className="border-t">
+                        <td className="p-2 font-medium">{p.name}</td>
+                        <td>{p.unit}</td>
+                        <td>{money(v?.company_unit_price)}</td>
+                        <td>{v?.mfec_share_type==='percentage'?'نسبة':'مبلغ ثابت'}</td>
+                        <td>{v?.mfec_share_type==='percentage'?`${v.mfec_share_value}%`:money(v?.mfec_share_value)}</td>
+                        <td>{v?.effective_from||'-'}</td>
+                        <td>{v?.effective_to||'مستمر'}</td>
+                        <td><StatusBadge value={p.is_active?'active':'inactive'}/></td>
+                        <td className="p-2">
+                          <div className="flex gap-1">
+                            {canPricing&&<Button type="button" size="sm" variant="ghost" title="تعديل عبر نسخة جديدة" onClick={()=>openPriceDialog(company.id,p)}><Edit3 className="w-4 h-4"/></Button>}
+                            {canPricing&&<Button type="button" size="sm" variant="ghost" title="تاريخ الأسعار" onClick={()=>void showHistory(p)}><History className="w-4 h-4"/></Button>}
+                            {canPricing&&<Button type="button" size="sm" variant="outline" onClick={async()=>{
+                              await financialErpApi.setPricingItemStatus(p.id,!p.is_active);
+                              await loadDetails(company.id);
+                              success(p.is_active?'تم تعطيل الفقرة':'تم تفعيل الفقرة');
+                            }}>{p.is_active?'تعطيل':'تفعيل'}</Button>}
+                          </div>
+                        </td>
+                      </tr>;
+                    })}
+                    {!detail?.pricing?.length&&<tr><td colSpan={9}><Empty title="لا توجد فقرات" description="أضف فقرة مثل كارتون أو كيلو."/></td></tr>}
+                  </CompactTable>
+                </CardContent>
+              </Card>
+            </>}
+          </AccordionContent>
+        </AccordionItem>;
+      })}
+    </Accordion>
+
+    <FormDialog open={createOpen} onOpenChange={(open)=>{setCreateOpen(open);if(!open)setEditingId(undefined)}} title={editingId?'تعديل بيانات الشركة':'إضافة شركة جديدة'} className="max-w-3xl">
+      <div className="grid md:grid-cols-2 gap-3">
+        <Field label="اسم الشركة *" error={errors.name}><Input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
+        <Field label="نوع الخدمة / النشاط *" error={errors.activity_code}>
+          <select className="w-full h-10 border rounded-md px-3 bg-white" value={form.activity_code} onChange={e=>setForm({...form,activity_code:e.target.value as ActivityCode|'',other_activity:e.target.value==='other'?form.other_activity:''})}>
+            <option value="">اختر نوع الخدمة</option>
+            {ACTIVITY_OPTIONS.map(o=><option key={o.code} value={o.code}>{o.label}</option>)}
+          </select>
+        </Field>
+        {form.activity_code==='other'&&<Field label="اكتب نوع النشاط *" className="md:col-span-2" error={errors.other_activity}><Input value={form.other_activity} onChange={e=>setForm({...form,other_activity:e.target.value})} placeholder="مثال: بوابات دفع"/></Field>}
+        <Field label="اسم صاحب الشركة *" error={errors.owner_name}><Input value={form.owner_name} onChange={e=>setForm({...form,owner_name:e.target.value})}/></Field>
+        <Field label="الهاتف *" error={errors.mobile}><Input value={form.mobile} onChange={e=>setForm({...form,mobile:e.target.value})}/></Field>
+        <Field label="العنوان *" className="md:col-span-2" error={errors.address}><Input value={form.address} onChange={e=>setForm({...form,address:e.target.value})}/></Field>
+        <Field label="تاريخ التعاون *" error={errors.cooperation_started_at}><SafeDateInput value={form.cooperation_started_at} onChange={e=>setForm({...form,cooperation_started_at:e.target.value})}/></Field>
+        <Field label="حالة التعاون">
+          <select className="w-full h-10 border rounded-md px-3" value={form.cooperation_status} onChange={e=>setForm({...form,cooperation_status:e.target.value})}>
+            <option value="active">فعال</option>
+            <option value="suspended">موقوف</option>
+            <option value="ended">منتهي</option>
+          </select>
+        </Field>
+        <Field label="الحالة النظامية">
+          <select className="w-full h-10 border rounded-md px-3" value={form.status} onChange={e=>setForm({...form,status:e.target.value})}>
+            <option value="active">فعال</option>
+            <option value="inactive">غير فعال</option>
+          </select>
+        </Field>
+        <Field label="معلومات الاتصال" className="md:col-span-2"><Textarea value={form.contact_info} onChange={e=>setForm({...form,contact_info:e.target.value})} placeholder="بريد، واتساب، شخص تواصل..."/></Field>
+        <Field label="ملاحظات" className="md:col-span-2"><Textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></Field>
       </div>
-      {(selected?can('financial.companies.edit'):can('financial.companies.create'))&&<Button type="button" disabled={savingCompany} onClick={saveCompany}>{savingCompany?'جاري الحفظ والتحقق...':'حفظ بيانات الشركة'}</Button>}
-      {selected&&<div className="border-t pt-4 space-y-3">
-        <div className="flex justify-between items-center"><h3 className="font-bold">فقرات التحاسب</h3>{can('financial.pricing.manage')&&<Button size="sm" onClick={()=>{setEditPrice(undefined);setPriceForm(blankPrice);setPriceOpen(true)}}><Plus className="w-4 h-4 ml-1"/>فقرة</Button>}</div>
-        <CompactTable headers={['الفقرة','الوحدة','سعر الشركة','حصة MFEC','النسخة/النفاذ','']}>{pricing.map(p=><tr key={p.id} className="border-t"><td className="p-2">{p.name}</td><td>{p.unit}</td><td>{money(p.current_version?.company_unit_price)}</td><td>{p.current_version?.mfec_share_type==='percentage'?`${p.current_version.mfec_share_value}%`:money(p.current_version?.mfec_share_value)}</td><td>v{p.current_version?.version} · {p.current_version?.effective_from}</td><td><Button size="sm" variant="ghost" onClick={async()=>{setEditPrice(p);setPriceForm({...blankPrice,...p.current_version,name:p.name,unit:p.unit,effective_to:p.current_version?.effective_to||''});setPriceHistory((await financialErpApi.pricingVersions(p.id)).items);setPriceOpen(true)}}><Edit3 className="w-4 h-4"/></Button></td></tr>)}</CompactTable>
-      </div>}
-      {selected&&<div className="border-t pt-4 space-y-3"><div className="flex justify-between"><h3 className="font-bold">مرفقات العقود الأصلية</h3>{can('financial.contracts.manage')&&<FileButton onFile={uploadAttachment}/>}</div>
-        {attachments.map(a=><div key={a.id} className="border rounded-lg p-2 flex justify-between items-center"><span><FileText className="w-4 h-4 inline ml-2"/>{a.original_filename}</span><div className="flex items-center"><Button size="icon" variant="ghost" onClick={()=>financialErpApi.openDocument(a.object_key)}><Eye className="w-4 h-4"/></Button><Button size="icon" variant="ghost" onClick={()=>financialErpApi.openDocument(a.object_key,a.original_filename)}><Download className="w-4 h-4"/></Button>{can('financial.contracts.manage')&&<FileButton label="استبدال" onFile={file=>uploadAttachment(file,a.id)}/>} {can('financial.contracts.manage')&&<Button size="icon" variant="ghost" onClick={async()=>{await financialErpApi.deleteCompanyAttachment(selected.id,a.id);setAttachments((await financialErpApi.companyAttachments(selected.id)).items)}}><Trash2 className="w-4 h-4 text-red-600"/></Button>}</div></div>)}
-        {!attachments.length&&<Empty title="لا توجد عقود مرفقة" description="يمكن رفع عدة ملفات PDF أو Office أو صور."/>}
-      </div>}
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="outline" onClick={()=>setCreateOpen(false)}>إلغاء</Button>
+        <Button type="button" disabled={savingCompany} onClick={()=>void saveCompany()}>{savingCompany?'جاري الحفظ...':'حفظ بيانات الشركة'}</Button>
+      </div>
     </FormDialog>
-    <FormDialog open={priceOpen} onOpenChange={setPriceOpen} title={editPrice?`نسخة سعر جديدة: ${editPrice.name}`:'فقرة تحاسب جديدة'}>
-      <div className="grid md:grid-cols-2 gap-3">{!editPrice&&<><Field label="اسم الفقرة"><Input value={priceForm.name} onChange={e=>setPriceForm({...priceForm,name:e.target.value})}/></Field><Field label="الوحدة"><Input value={priceForm.unit} onChange={e=>setPriceForm({...priceForm,unit:e.target.value})}/></Field></>}
-        <Field label="سعر الشركة"><Input type="number" value={priceForm.company_unit_price} onChange={e=>setPriceForm({...priceForm,company_unit_price:e.target.value})}/></Field>
-        <Field label="نوع حصة MFEC"><select className="w-full h-10 border rounded-md px-3" value={priceForm.mfec_share_type} onChange={e=>setPriceForm({...priceForm,mfec_share_type:e.target.value})}><option value="fixed">مبلغ ثابت</option><option value="percentage">نسبة مئوية</option></select></Field>
-        <Field label="قيمة الحصة"><Input type="number" value={priceForm.mfec_share_value} onChange={e=>setPriceForm({...priceForm,mfec_share_value:e.target.value})}/></Field>
-        <Field label="نافذ من"><SafeDateInput value={priceForm.effective_from} onChange={e=>setPriceForm({...priceForm,effective_from:e.target.value})}/></Field>
-        <Field label="نافذ إلى"><SafeDateInput value={priceForm.effective_to} onChange={e=>setPriceForm({...priceForm,effective_to:e.target.value})}/></Field>
-      </div>{editPrice&&<div className="border rounded-lg overflow-hidden"><h4 className="font-bold p-2 bg-slate-50">سجل النسخ الفعالة</h4>{priceHistory.map(v=><div key={v.id} className="grid grid-cols-4 gap-2 p-2 border-t text-sm"><span>v{v.version}</span><span>{v.effective_from} — {v.effective_to||'مستمر'}</span><span>{money(v.company_unit_price)}</span><span>{v.mfec_share_type==='percentage'?`${v.mfec_share_value}%`:money(v.mfec_share_value)}</span></div>)}</div>} {can('financial.pricing.manage')&&<Button type="button" onClick={savePrice}>حفظ النسخة</Button>}
+
+    <FormDialog open={priceOpen} onOpenChange={setPriceOpen} title={editPrice?`نسخة سعر جديدة — ${editPrice.name}`:'إضافة فقرة تحاسب'}>
+      <div className="grid md:grid-cols-2 gap-3">
+        {!editPrice&&<>
+          <Field label="اسم الفقرة *"><Input value={priceForm.name} onChange={e=>setPriceForm({...priceForm,name:e.target.value})} placeholder="كارتون / كيلو"/></Field>
+          <Field label="الوحدة *"><Input value={priceForm.unit} onChange={e=>setPriceForm({...priceForm,unit:e.target.value})} placeholder="كارتون / كغم"/></Field>
+        </>}
+        {editPrice&&<div className="md:col-span-2 text-sm bg-amber-50 border border-amber-200 rounded-md p-3">تعديل السعر ينشئ <b>نسخة جديدة</b> ولا يغيّر العمليات أو الأشهر السابقة.</div>}
+        <Field label="سعر العميل *"><Input type="number" value={priceForm.company_unit_price} onChange={e=>setPriceForm({...priceForm,company_unit_price:e.target.value})}/></Field>
+        <Field label="نوع حصة التجمع MFEC *">
+          <select className="w-full h-10 border rounded-md px-3" value={priceForm.mfec_share_type} onChange={e=>setPriceForm({...priceForm,mfec_share_type:e.target.value})}>
+            <option value="fixed">مبلغ ثابت</option>
+            <option value="percentage">نسبة</option>
+          </select>
+        </Field>
+        <Field label="قيمة حصة التجمع *"><Input type="number" value={priceForm.mfec_share_value} onChange={e=>setPriceForm({...priceForm,mfec_share_value:e.target.value})}/></Field>
+        <Field label="تاريخ بدء السعر *"><SafeDateInput value={priceForm.effective_from} onChange={e=>setPriceForm({...priceForm,effective_from:e.target.value})}/></Field>
+        <Field label="تاريخ انتهاء اختياري"><SafeDateInput value={priceForm.effective_to} onChange={e=>setPriceForm({...priceForm,effective_to:e.target.value})}/></Field>
+        <Field label="ملاحظات" className="md:col-span-2"><Textarea value={priceForm.notes} onChange={e=>setPriceForm({...priceForm,notes:e.target.value})}/></Field>
+      </div>
+      {canPricing&&<Button type="button" disabled={savingPrice} onClick={()=>void savePrice()}>{savingPrice?'جاري الحفظ...':editPrice?'حفظ النسخة الجديدة':'حفظ الفقرة'}</Button>}
+    </FormDialog>
+
+    <FormDialog open={historyOpen} onOpenChange={setHistoryOpen} title={`تاريخ أسعار — ${editPrice?.name||''}`}>
+      <CompactTable headers={['النسخة','من','إلى','سعر العميل','حصة MFEC']}>
+        {priceHistory.map(v=><tr key={v.id} className="border-t">
+          <td className="p-2">v{v.version}</td>
+          <td>{v.effective_from}</td>
+          <td>{v.effective_to||'مستمر'}</td>
+          <td>{money(v.company_unit_price)}</td>
+          <td>{v.mfec_share_type==='percentage'?`${v.mfec_share_value}%`:money(v.mfec_share_value)}</td>
+        </tr>)}
+        {!priceHistory.length&&<tr><td colSpan={5}><Empty title="لا يوجد تاريخ أسعار"/></td></tr>}
+      </CompactTable>
     </FormDialog>
   </div>;
 }
@@ -153,5 +531,3 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
     </FormDialog>
   </div>;
 }
-
-function Field({label,children,className=''}:{label:string;children:React.ReactNode;className?:string}){return <div className={className}><Label className="mb-1 block">{label}</Label>{children}</div>}
