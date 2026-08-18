@@ -59,6 +59,9 @@ class PanelUserCreate(BaseModel):
     password: str = Field(..., min_length=4, max_length=200)
     permissions: PermissionsModel = Field(default_factory=PermissionsModel)
     is_active: bool = True
+    email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(None, max_length=40)
+    recovery_preferred: Optional[str] = Field(None, max_length=20)
 
 
 class PanelUserUpdate(BaseModel):
@@ -66,6 +69,9 @@ class PanelUserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=4, max_length=200)
     permissions: Optional[PermissionsModel] = None
     is_active: Optional[bool] = None
+    email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(None, max_length=40)
+    recovery_preferred: Optional[str] = Field(None, max_length=20)
 
 
 class PanelUserResponse(BaseModel):
@@ -74,6 +80,9 @@ class PanelUserResponse(BaseModel):
     permissions: PermissionsModel
     is_active: bool
     is_super_admin: bool = False
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    recovery_preferred: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -94,6 +103,9 @@ def serialize_user(user: PanelUser) -> PanelUserResponse:
         permissions=PermissionsModel(**perms),
         is_active=bool(user.is_active),
         is_super_admin=bool(getattr(user, "is_super_admin", False)),
+        email=getattr(user, "email", None),
+        phone=getattr(user, "phone", None),
+        recovery_preferred=getattr(user, "recovery_preferred", None),
         created_at=str(user.created_at) if user.created_at else None,
         updated_at=str(user.updated_at) if user.updated_at else None,
     )
@@ -141,6 +153,9 @@ async def create_user(
             permissions=permissions_to_json(data.permissions.model_dump()),
             is_active=data.is_active,
             is_super_admin=False,
+            email=(data.email or "").strip() or None,
+            phone=(data.phone or "").strip() or None,
+            recovery_preferred=(data.recovery_preferred or "").strip() or None,
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
@@ -201,6 +216,13 @@ async def update_user(
         if data.is_active is not None:
             user.is_active = data.is_active
 
+        if data.email is not None:
+            user.email = data.email.strip() or None
+        if data.phone is not None:
+            user.phone = data.phone.strip() or None
+        if data.recovery_preferred is not None:
+            user.recovery_preferred = data.recovery_preferred.strip() or None
+
         user.updated_at = datetime.now()
         add_audit(
             db, action="update", entity_type="panel_user", entity_id=user.id,
@@ -208,6 +230,8 @@ async def update_user(
             new_values={
                 "username": user.username, "permissions": normalize_permissions(user.permissions),
                 "is_active": bool(user.is_active), "password_reset": bool(data.password),
+                "email": getattr(user, "email", None), "phone": getattr(user, "phone", None),
+                "recovery_preferred": getattr(user, "recovery_preferred", None),
             },
         )
         await db.commit()

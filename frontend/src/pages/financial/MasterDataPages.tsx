@@ -380,14 +380,11 @@ export function CompaniesPage({companies,services,reloadCompanies,can,notify,suc
                         <td>{v?.effective_to||'مستمر'}</td>
                         <td><StatusBadge value={p.is_active?'active':'inactive'}/></td>
                         <td className="p-2">
-                          <div className="flex gap-1">
-                            {canPricing&&<Button type="button" size="sm" variant="ghost" title="تعديل عبر نسخة جديدة" onClick={()=>openPriceDialog(company.id,p)}><Edit3 className="w-4 h-4"/></Button>}
+                          <div className="flex gap-1 flex-wrap">
+                            {canPricing&&<Button type="button" size="sm" variant="ghost" title="نسخة سعر جديدة" onClick={()=>openPriceDialog(company.id,p)}><Edit3 className="w-4 h-4"/></Button>}
                             {canPricing&&<Button type="button" size="sm" variant="ghost" title="تاريخ الأسعار" onClick={()=>void showHistory(p)}><History className="w-4 h-4"/></Button>}
-                            {canPricing&&<Button type="button" size="sm" variant="outline" onClick={async()=>{
-                              await financialErpApi.setPricingItemStatus(p.id,!p.is_active);
-                              await loadDetails(company.id);
-                              success(p.is_active?'تم تعطيل الفقرة':'تم تفعيل الفقرة');
-                            }}>{p.is_active?'تعطيل':'تفعيل'}</Button>}
+                            {canPricing&&<Button type="button" size="sm" variant="outline" onClick={async()=>{try{await financialErpApi.setPricingItemStatus(p.id,!p.is_active);await loadDetails(company.id,true);success(p.is_active?'تم تعطيل الفقرة مع الإبقاء على التاريخ':'تم تفعيل الفقرة')}catch(e){notify(e)}}}>{p.is_active?'تعطيل':'تفعيل'}</Button>}
+                            {canPricing&&<Button type="button" size="sm" variant="ghost" title="حذف آمن" onClick={async()=>{if(!confirm(`حذف الفقرة ${p.name}؟ سيُرفض إن وُجدت معاملات مرتبطة.`))return;try{await financialErpApi.deletePricingItem(p.id);await loadDetails(company.id,true);success('تم حذف الفقرة')}catch(e){notify(e)}}}><Trash2 className="w-4 h-4 text-red-600"/></Button>}
                           </div>
                         </td>
                       </tr>;
@@ -515,7 +512,9 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
         <Field label="نوع الخدمة"><Input readOnly className="bg-slate-50" value={selectedCompany?.service_type_name||''} placeholder="يظهر تلقائياً من الشركة"/></Field>
         <Field label="الحالة"><select className="w-full h-10 border rounded-md px-3" value={form.status} onChange={e=>setForm({...form,status:e.target.value,is_active:e.target.value==='active'})}><option value="active">فعال</option><option value="inactive">غير فعال</option><option value="suspended">معلق</option></select></Field>
         <Field label="الاسم المسجل"><Input value={form.registered_name||''} onChange={e=>setForm({...form,registered_name:e.target.value})}/></Field><Field label="الهاتف المسجل"><Input value={form.registered_phone||''} onChange={e=>setForm({...form,registered_phone:e.target.value})}/></Field><Field label="كود العميل"><Input value={form.customer_code||''} onChange={e=>setForm({...form,customer_code:e.target.value})}/></Field>
-        <Field label="رابط بوابة العميل" className="md:col-span-2"><Input dir="ltr" value={form.customer_portal_url||''} onChange={e=>setForm({...form,customer_portal_url:e.target.value})}/></Field><Field label="تاريخ البدء"><SafeDateInput value={form.started_at||''} onChange={e=>setForm({...form,started_at:e.target.value})}/></Field>
+        <Field label="رابط بوابة العميل" className="md:col-span-2"><Input dir="ltr" value={form.customer_portal_url||''} onChange={e=>setForm({...form,customer_portal_url:e.target.value})}/></Field>
+        <Field label="تاريخ البدء"><SafeDateInput value={form.started_at||''} onChange={e=>setForm({...form,started_at:e.target.value})}/></Field>
+        <Field label="تاريخ الانتهاء / الأرشفة"><SafeDateInput value={form.ended_at||''} onChange={e=>setForm({...form,ended_at:e.target.value})}/></Field>
         <Field label="ملاحظات" className="md:col-span-3"><Textarea value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})}/></Field>
       </div>
       {!!form.company_id&&<div className="border-t pt-4 space-y-3"><div><h3 className="font-bold">فقرات التحاسب النشطة</h3><p className="text-sm text-slate-500">اختر الفقرات؛ سعر الشركة وحصة MFEC يطبقان تلقائياً ما لم تفعّل استثناءً.</p></div>
@@ -527,6 +526,18 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
             {custom&&<div className="grid md:grid-cols-3 gap-2"><Field label="سعر الوحدة الخاص (اختياري)"><Input type="number" placeholder={String(version?.company_unit_price??'')} value={item.unit_price_override??''} onChange={e=>setItems(xs=>xs.map(x=>x.pricing_item_id===p.id?{...x,unit_price_override:e.target.value===''?undefined:Number(e.target.value)}:x))}/></Field><Field label="نوع الحصة الخاصة (اختياري)"><select className="h-10 w-full border rounded-md px-2" value={item.mfec_share_type_override||''} onChange={e=>setItems(xs=>xs.map(x=>x.pricing_item_id===p.id?{...x,mfec_share_type_override:(e.target.value||undefined) as any}:x))}><option value="">حصة الشركة</option><option value="fixed">ثابت</option><option value="percentage">نسبة</option></select></Field><Field label="قيمة الحصة الخاصة (اختياري)"><Input type="number" placeholder={String(version?.mfec_share_value??'')} value={item.mfec_share_value_override??''} onChange={e=>setItems(xs=>xs.map(x=>x.pricing_item_id===p.id?{...x,mfec_share_value_override:e.target.value===''?undefined:Number(e.target.value)}:x))}/></Field></div>}</>}
         </div>})}</div>}
       {can(selected?'financial.member_links.edit':'financial.member_links.create')&&<Button type="button" disabled={saving||loadingPricing} onClick={save}>{saving?'جاري الحفظ والتحقق...':'حفظ الحساب والفقرات'}</Button>}
+      {selected&&can('financial.member_links.delete')&&<Button type="button" variant="destructive" disabled={saving} onClick={async()=>{
+        if(!confirm(`أرشفة ارتباط ${selected.member_name} لدى ${selected.company_name}؟ لن تُحذف المعاملات التاريخية.`))return;
+        try{
+          const x=await financialErpApi.deleteMemberAccount(selected.id);
+          setOpen(false);await load();
+          success(x.message||'تمت أرشفة الارتباط');
+        }catch(e){notify(e)}
+      }}>أرشفة الارتباط</Button>}
+      {selected&&!can('financial.member_links.delete')&&can('financial.member_links.edit')&&<Button type="button" variant="outline" disabled={saving} onClick={async()=>{
+        setForm((f:any)=>({...f,status:'inactive',is_active:false,ended_at:f.ended_at||new Date().toISOString().slice(0,10)}));
+        success('حدّد الحالة غير فعال وتاريخ الانتهاء ثم احفظ للأرشفة');
+      }}>تعيين للأرشفة ثم احفظ</Button>}
       {selected&&<div className="border-t pt-4 space-y-2"><div className="flex justify-between items-end gap-2"><h3 className="font-bold">ملحق الاتفاق الثلاثي</h3>{can('financial.annexes.manage')&&<div className="flex items-end gap-2"><Field label="تاريخ التوقيع"><SafeDateInput className="w-40" value={annexDate} onChange={e=>setAnnexDate(e.target.value)}/></Field><FileButton onFile={uploadAnnex}/></div>}</div>{annexes.map(a=><div key={a.id} className="flex justify-between border rounded p-2"><span>{a.original_filename}<small className="block text-slate-500">{a.signed_at?`موقع في ${a.signed_at}`:'دون تاريخ توقيع'}</small></span><div className="flex"><Button size="icon" variant="ghost" onClick={()=>financialErpApi.openDocument(a.object_key)}><Eye className="w-4 h-4"/></Button>{can('financial.annexes.manage')&&<FileButton label="استبدال" onFile={file=>uploadAnnex(file,a.id)}/>} {can('financial.annexes.manage')&&<Button size="icon" variant="ghost" onClick={async()=>{await financialErpApi.deleteAnnex(selected.id,a.id);setAnnexes((await financialErpApi.annexes(selected.id)).items)}}><Trash2 className="w-4 h-4 text-red-600"/></Button>}</div></div>)}</div>}
     </FormDialog>
   </div>;

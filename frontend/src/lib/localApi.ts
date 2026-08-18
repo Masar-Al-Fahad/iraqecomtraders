@@ -133,6 +133,24 @@ export const client = {
       localAuth.setToken(token);
       return data;
     },
+    async requestPasswordReset(username: string, channel?: string) {
+      const res = await fetch(`${apiBase()}/api/v1/auth/password-reset/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, channel: channel || null }),
+      });
+      if (!res.ok) throw Object.assign(new Error(await readError(res)), { status: res.status });
+      return res.json();
+    },
+    async confirmPasswordReset(username: string, otp: string, new_password: string) {
+      const res = await fetch(`${apiBase()}/api/v1/auth/password-reset/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, otp, new_password }),
+      });
+      if (!res.ok) throw Object.assign(new Error(await readError(res)), { status: res.status });
+      return res.json();
+    },
     async logout() {
       try {
         const token = localAuth.getToken();

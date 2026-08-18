@@ -16,5 +16,9 @@ class PanelUser(Base):
     permissions = Column(Text, nullable=False, default="{}")
     is_active = Column(Boolean, nullable=False, default=True)
     is_super_admin = Column(Boolean, nullable=False, default=False)
+    # Recovery contact for forgot-password OTP (optional until configured by admin)
+    email = Column(String(255), nullable=True)
+    phone = Column(String(40), nullable=True)
+    recovery_preferred = Column(String(20), nullable=True)  # email | phone | auto
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)

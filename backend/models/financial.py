@@ -149,9 +149,14 @@ class MonthlyActivity(Base):
 class FinancialExpense(Base):
     __tablename__ = "financial_expenses"
     id = Column(Integer, primary_key=True)
+    payment_number = Column(String(80), unique=True)
     expense_date = Column(Date, nullable=False)
     accounting_year = Column(Integer, nullable=False)
     accounting_month = Column(Integer, nullable=False)
+    payee = Column(String(200))  # دُفع إلى
+    person_name = Column(String(200))  # اسم الشخص
+    company_name = Column(String(200))  # اسم الشركة (المستفيدة)
+    payment_method = Column(String(80))
     category = Column(String(120), nullable=False)
     description = Column(String(500), nullable=False)
     amount = Column(Numeric(18, 3), nullable=False)

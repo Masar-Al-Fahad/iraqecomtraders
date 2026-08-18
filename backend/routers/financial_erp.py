@@ -98,7 +98,7 @@ class ReverseIn(BaseModel):
 
 
 class ReceiptIn(BaseModel):
-    receipt_number: str = Field(min_length=1, max_length=80)
+    # receipt_number is server-allocated on create (REC-N). Ignored if client sends it.
     company_id: int
     received_at: date
     amount: Decimal = Field(gt=0)
@@ -111,8 +111,22 @@ class ReceiptIn(BaseModel):
     attachment_key: str | None = None
 
 
-class ReceiptUpdateIn(ReceiptIn):
-    pass
+class ReceiptUpdateIn(BaseModel):
+    company_id: int
+    received_at: date
+    amount: Decimal = Field(gt=0)
+    receipt_method: str = Field(min_length=1, max_length=80)
+    category: str | None = None
+    description: str = Field(min_length=1, max_length=500)
+    period_start: date | None = None
+    period_end: date | None = None
+    notes: str | None = None
+    attachment_key: str | None = None
+
+
+class VoucherNumbersIn(BaseModel):
+    next_rec: int | None = Field(default=None, ge=1, le=9_999_999)
+    next_pay: int | None = Field(default=None, ge=1, le=9_999_999)
 
 
 class AllocationIn(BaseModel):
@@ -395,11 +409,25 @@ async def create_pricing_version(
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(PricingItem, item_id)
-    if not item: raise HTTPException(404, "البند غير موجود")
+    if not item or item.deleted_at is not None:
+        raise HTTPException(404, "البند غير موجود")
     version_no = (await db.execute(
         select(func.coalesce(func.max(PricingItemVersion.version), 0)).where(PricingItemVersion.pricing_item_id == item_id)
     )).scalar_one() + 1
     actor = await resolve_actor_name(db, user)
+    # Close previously open versions so history remains non-overlapping.
+    from datetime import timedelta
+    open_versions = (await db.execute(
+        select(PricingItemVersion).where(
+            PricingItemVersion.pricing_item_id == item_id,
+            PricingItemVersion.effective_to.is_(None),
+        )
+    )).scalars().all()
+    for old in open_versions:
+        if old.effective_from < data.effective_from:
+            old.effective_to = data.effective_from - timedelta(days=1)
+        else:
+            old.effective_to = data.effective_from
     version = PricingItemVersion(
         pricing_item_id=item_id, version=version_no,
         company_unit_price=money(data.company_unit_price), mfec_share_type=data.mfec_share_type,
@@ -410,6 +438,39 @@ async def create_pricing_version(
     add_audit(db, action="pricing.version", entity_type="pricing_item", entity_id=item_id, actor=actor, new_values=data.model_dump())
     await db.commit()
     return {"id": version.id, "version": version_no}
+
+
+@router.delete("/pricing-items/{item_id}")
+async def soft_delete_pricing_item(
+    item_id: int,
+    user: UserResponse = Depends(require_permission("financial.pricing.manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(PricingItem, item_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(404, "فقرة التحاسب غير موجودة")
+    linked_lines = (await db.execute(
+        select(func.count(MonthlyEntryLine.id)).where(MonthlyEntryLine.pricing_item_id == item_id)
+    )).scalar_one()
+    linked_accounts = (await db.execute(
+        select(func.count(MemberAccountItem.id)).where(
+            MemberAccountItem.pricing_item_id == item_id,
+            MemberAccountItem.is_active.is_(True),
+        )
+    )).scalar_one()
+    if linked_lines or linked_accounts:
+        raise HTTPException(
+            409,
+            "لا يمكن حذف الفقرة لأنها مرتبطة ببيانات مالية "
+            f"(سطور إدخال: {int(linked_lines or 0)}، ارتباطات أعضاء نشطة: {int(linked_accounts or 0)}). "
+            "عطّل/أرشف الفقرة بدل الحذف للحفاظ على التاريخ.",
+        )
+    actor = await resolve_actor_name(db, user)
+    item.deleted_at = datetime.now()
+    item.is_active = False
+    add_audit(db, action="pricing_item.soft_delete", entity_type="pricing_item", entity_id=item.id, actor=actor)
+    await db.commit()
+    return {"id": item.id, "deleted": True}
 
 
 @router.get("/pricing-items/{item_id}/versions")
@@ -917,18 +978,105 @@ async def settlement_lines(
         "quantity":float(line.quantity),"amount":float(sl.amount_snapshot)} for sl,line,member,item in rows]}
 
 
+@router.get("/voucher-numbers")
+async def get_voucher_numbers(
+    _user: UserResponse = Depends(require_any_permission(
+        "financial.revenues.view", "financial.revenues.create",
+        "financial.expenses.view", "financial.expenses.create",
+        "view_expenses", "enter_expenses",
+    )),
+    db: AsyncSession = Depends(get_db),
+):
+    from services.voucher_numbers import (
+        format_payment, format_receipt, peek_next_payment_number, peek_next_receipt_number,
+    )
+    next_rec = await peek_next_receipt_number(db)
+    next_pay = await peek_next_payment_number(db)
+    return {
+        "next_rec": next_rec,
+        "next_pay": next_pay,
+        "preview_rec": format_receipt(next_rec),
+        "preview_pay": format_payment(next_pay),
+    }
+
+
+@router.put("/voucher-numbers")
+async def put_voucher_numbers(
+    data: VoucherNumbersIn,
+    user: UserResponse = Depends(require_any_permission(
+        "financial.revenues.edit", "financial.revenues.create",
+        "financial.expenses.edit", "financial.expenses.create",
+        "enter_expenses",
+    )),
+    db: AsyncSession = Depends(get_db),
+):
+    from services.voucher_numbers import (
+        format_payment, format_receipt, peek_next_payment_number, peek_next_receipt_number,
+        set_next_payment_number, set_next_receipt_number,
+    )
+    actor = await resolve_actor_name(db, user)
+    if data.next_rec is not None:
+        await set_next_receipt_number(db, data.next_rec)
+    if data.next_pay is not None:
+        await set_next_payment_number(db, data.next_pay)
+    next_rec = await peek_next_receipt_number(db)
+    next_pay = await peek_next_payment_number(db)
+    add_audit(
+        db, action="voucher_numbers.set", entity_type="system_counters", entity_id=None, actor=actor,
+        new_values={"next_rec": next_rec, "next_pay": next_pay},
+    )
+    await db.commit()
+    return {
+        "next_rec": next_rec,
+        "next_pay": next_pay,
+        "preview_rec": format_receipt(next_rec),
+        "preview_pay": format_payment(next_pay),
+    }
+
+
 @router.post("/revenues")
 async def create_revenue(
     data: ReceiptIn,
     user: UserResponse = Depends(require_permission("financial.revenues.create")),
     db: AsyncSession = Depends(get_db),
 ):
-    actor=await resolve_actor_name(db,user)
-    receipt=RevenueReceipt(**data.model_dump(),created_by=actor,updated_by=actor)
-    db.add(receipt); await db.flush()
-    add_audit(db,action="revenue.create",entity_type="revenue_receipt",entity_id=receipt.id,actor=actor,new_values=data.model_dump())
-    await db.commit()
-    return {"id":receipt.id}
+    from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+
+    from services.voucher_numbers import allocate_receipt_number
+
+    actor = await resolve_actor_name(db, user)
+    last_err: Exception | None = None
+    for _attempt in range(3):
+        try:
+            receipt_number = await allocate_receipt_number(db)
+            receipt = RevenueReceipt(
+                **data.model_dump(),
+                receipt_number=receipt_number,
+                created_by=actor,
+                updated_by=actor,
+            )
+            db.add(receipt)
+            await db.flush()
+            add_audit(
+                db, action="revenue.create", entity_type="revenue_receipt", entity_id=receipt.id, actor=actor,
+                new_values={**data.model_dump(), "receipt_number": receipt_number},
+            )
+            await db.commit()
+            return {"id": receipt.id, "receipt_number": receipt_number}
+        except IntegrityError as err:
+            await db.rollback()
+            last_err = err
+            continue
+        except (OperationalError, ProgrammingError) as err:
+            await db.rollback()
+            msg = str(getattr(err, "orig", err))
+            if "receipt_number" in msg or "does not exist" in msg or "no such column" in msg.lower():
+                raise HTTPException(
+                    500,
+                    "فشل حفظ وصل القبض: مخطط قاعدة البيانات غير محدّث. طبّق migrations ثم أعد المحاولة.",
+                ) from err
+            raise HTTPException(500, f"فشل حفظ وصل القبض: {msg}") from err
+    raise HTTPException(409, f"تعذر تخصيص رقم وصل فريد بعد عدة محاولات: {last_err}")
 
 
 @router.get("/revenues")
@@ -949,6 +1097,7 @@ async def list_revenues(
         "category":x.category,"description":x.description,"period_start":x.period_start.isoformat() if x.period_start else None,
         "period_end":x.period_end.isoformat() if x.period_end else None,"notes":x.notes,
         "attachment_key":x.attachment_key,"created_by":x.created_by,
+        "status":"cancelled" if x.deleted_at else "active",
         "deleted":bool(x.deleted_at)} for x,a in rows]}
 
 
@@ -959,6 +1108,7 @@ async def update_revenue(
 ):
     row=await db.get(RevenueReceipt,receipt_id)
     if not row:raise HTTPException(404,"وصل القبض غير موجود")
+    if row.deleted_at:raise HTTPException(409,"لا يمكن تعديل وصل ملغى")
     allocated=(await db.execute(select(func.coalesce(func.sum(ReceiptAllocation.allocated_amount),0)).where(
         ReceiptAllocation.receipt_id==receipt_id))).scalar_one()
     if money(data.amount)<money(allocated):raise HTTPException(409,"المبلغ أقل من المبلغ المخصص")
@@ -967,7 +1117,7 @@ async def update_revenue(
     for key,value in data.model_dump().items():setattr(row,key,value)
     row.updated_by=actor
     add_audit(db,action="revenue.update",entity_type="revenue_receipt",entity_id=row.id,actor=actor,old_values=old,new_values=data.model_dump())
-    await db.commit();return {"id":row.id}
+    await db.commit();return {"id":row.id,"receipt_number":row.receipt_number}
 
 
 @router.get("/revenues/{receipt_id}/allocations")
@@ -1037,9 +1187,11 @@ async def delete_revenue(
 ):
     row=await db.get(RevenueReceipt,receipt_id)
     if not row: raise HTTPException(404,"وصل القبض غير موجود")
+    if row.deleted_at: return {"id":row.id,"status":"cancelled","receipt_number":row.receipt_number}
     actor=await resolve_actor_name(db,user); row.deleted_at=datetime.now(); row.deleted_by=actor
-    add_audit(db,action="revenue.delete",entity_type="revenue_receipt",entity_id=row.id,actor=actor,old_values={"amount":row.amount})
-    await db.commit(); return {"id":row.id,"deleted":True}
+    add_audit(db,action="revenue.cancel",entity_type="revenue_receipt",entity_id=row.id,actor=actor,
+              old_values={"receipt_number":row.receipt_number,"amount":float(row.amount)})
+    await db.commit(); return {"id":row.id,"status":"cancelled","receipt_number":row.receipt_number}
 
 
 @router.post("/revenues/{receipt_id}/restore")
@@ -1058,10 +1210,12 @@ async def soft_delete_expense(
     expense_id:int,user:UserResponse=Depends(require_permission("financial.expenses.delete")),db:AsyncSession=Depends(get_db),
 ):
     row=await db.get(FinancialExpense,expense_id)
-    if not row: raise HTTPException(404,"المصروف غير موجود")
+    if not row: raise HTTPException(404,"وصل الصرف غير موجود")
+    if row.deleted_at: return {"id":row.id,"status":"cancelled","payment_number":row.payment_number}
     actor=await resolve_actor_name(db,user); row.deleted_at=datetime.now(); row.deleted_by=actor
-    add_audit(db,action="expense.delete",entity_type="expense",entity_id=row.id,actor=actor,old_values={"amount":row.amount})
-    await db.commit(); return {"id":row.id,"deleted":True}
+    add_audit(db,action="expense.cancel",entity_type="expense",entity_id=row.id,actor=actor,
+              old_values={"payment_number":row.payment_number,"amount":float(row.amount)})
+    await db.commit(); return {"id":row.id,"status":"cancelled","payment_number":row.payment_number}
 
 
 @router.post("/expenses/{expense_id}/restore")

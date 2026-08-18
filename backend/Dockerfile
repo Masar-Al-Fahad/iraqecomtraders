@@ -23,4 +23,5 @@ COPY . .
 # Railway injects PORT; default 8000 for local runs
 EXPOSE 8000
 
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Apply safe additive migrations before serving traffic (never drops data).
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

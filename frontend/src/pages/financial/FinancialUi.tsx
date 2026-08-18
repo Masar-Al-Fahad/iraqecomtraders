@@ -10,12 +10,12 @@ export const money=(value:number|string|undefined)=>`${Number(value||0).toLocale
 export const statusLabel=(value:string)=>({
   active:'فعال',inactive:'غير فعال',suspended:'معلق',ended:'منتهي',draft:'مسودة',
   approved:'معتمد',settled:'تم التحاسب',unsettled:'غير محاسب',reversed:'معكوس',
-  ready:'جاهزة',restore_requested:'طلب استعادة',deleted:'محذوفة',
+  ready:'جاهزة',restore_requested:'طلب استعادة',deleted:'محذوفة',cancelled:'ملغى',
 }[value]||value);
 
 export function StatusBadge({value}:{value:string}){
   const good=['active','approved','settled'].includes(value);
-  return <Badge variant={good?'default':'outline'} className={value==='reversed'||value==='ended'?'text-red-700 border-red-300':''}>{statusLabel(value)}</Badge>;
+  return <Badge variant={good?'default':'outline'} className={value==='reversed'||value==='ended'||value==='cancelled'?'text-red-700 border-red-300':''}>{statusLabel(value)}</Badge>;
 }
 
 export function PageTitle({title,description,actions}:{title:string;description:string;actions?:ReactNode}){
@@ -54,6 +54,11 @@ export function SafeDateInput(props:Omit<ComponentProps<typeof Input>,'type'>){
   }}/>;
 }
 
-export function CompactTable({headers,children}:{headers:string[];children:ReactNode}){
-  return <div className="overflow-auto rounded-xl border bg-white"><table className="w-full text-sm whitespace-nowrap"><thead className="bg-slate-100 text-slate-700"><tr>{headers.map(x=><th key={x} className="p-3 text-right font-semibold">{x}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;
+export function CompactTable({headers,children,printFriendly=false}:{headers:string[];children:ReactNode;printFriendly?:boolean}){
+  return <div className={`rounded-xl border bg-white ${printFriendly?'overflow-visible print:overflow-visible':'overflow-auto'}`}>
+    <table className={`w-full text-sm ${printFriendly?'print:text-[10px] print:whitespace-normal whitespace-normal':'whitespace-nowrap'}`}>
+      <thead className="bg-slate-100 text-slate-700"><tr>{headers.map(x=><th key={x} className={`p-3 text-right font-semibold ${x==='اختيار'?'print:hidden':''}`}>{x}</th>)}</tr></thead>
+      <tbody>{children}</tbody>
+    </table>
+  </div>;
 }

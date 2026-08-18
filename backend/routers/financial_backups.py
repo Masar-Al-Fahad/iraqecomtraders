@@ -107,6 +107,8 @@ async def request_restore(
 ):
     if data.confirmation != "RESTORE":
         raise HTTPException(400, "اكتب RESTORE حرفيًا لتأكيد طلب الاستعادة")
+    if not (data.notes or "").strip():
+        raise HTTPException(400, "سبب الاستعادة مطلوب")
     target = await db.get(FinancialBackup, backup_id)
     if not target or target.deleted_at or target.status not in {"ready", "restore_requested"}:
         raise HTTPException(409, "النسخة غير متاحة للاستعادة")

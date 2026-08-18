@@ -46,9 +46,15 @@ export type Settlement = { id:number; batch_number:string; company_id:number; se
 export type Revenue = {
   id:number; receipt_number:string; company_id:number; received_at:string; amount:number; allocated:number; remaining:number;
   receipt_method:string; category?:string; description:string; period_start?:string; period_end?:string;
-  notes?:string; attachment_key?:string; created_by?:string; deleted:boolean;
+  notes?:string; attachment_key?:string; created_by?:string; status?:'active'|'cancelled'; deleted:boolean;
 };
-export type Expense = { id:number; expense_date:string; accounting_year:number; accounting_month:number; category:string; description:string; amount:number; notes?:string; receipt_key?:string; created_by:string; deleted:boolean };
+export type Expense = {
+  id:number; payment_number?:string; expense_date:string; accounting_year:number; accounting_month:number;
+  payee?:string; person_name?:string; company_name?:string; payment_method?:string; category:string;
+  description:string; amount:number; notes?:string; receipt_key?:string; created_by:string;
+  status?:'active'|'cancelled'; deleted:boolean;
+};
+export type VoucherNumbers = { next_rec:number; next_pay:number; preview_rec:string; preview_pay:string };
 export type FinancialBackup = {
   id:number; backup_number:string; kind:string; status:string; notes?:string;
   size_bytes:number; checksum_sha256:string; created_by:string; created_at:string;

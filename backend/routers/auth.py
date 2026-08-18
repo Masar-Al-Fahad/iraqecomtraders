@@ -6,7 +6,7 @@ from core.auth import create_access_token
 from core.config import settings
 from core.database import get_db
 from dependencies.auth import get_current_user
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from schemas.auth import UserResponse
@@ -29,6 +29,31 @@ class LocalLoginResponse(BaseModel):
     token: str
     token_type: str = "Bearer"
     user: UserResponse
+
+
+class PasswordResetRequestIn(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
+    channel: str | None = Field(default=None, description="email | phone | auto")
+
+
+class PasswordResetConfirmIn(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
+    otp: str = Field(..., min_length=4, max_length=12)
+    new_password: str = Field(..., min_length=6, max_length=200)
+
+
+class SuperAdminRecoveryIn(BaseModel):
+    recovery_secret: str = Field(..., min_length=8, max_length=200)
+    new_password: str = Field(..., min_length=8, max_length=200)
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()[:64]
+    if request.client:
+        return (request.client.host or "")[:64]
+    return None
 
 
 @router.get("/login")
@@ -71,7 +96,7 @@ async def local_login(data: LocalLoginRequest, db: AsyncSession = Depends(get_db
 
     claims = {
         "sub": f"panel:{user.id}",
-        "email": f"{user.username}@local",
+        "email": getattr(user, "email", None) or f"{user.username}@local",
         "name": user.username,
         "role": "admin",
         "username": user.username,
@@ -83,7 +108,7 @@ async def local_login(data: LocalLoginRequest, db: AsyncSession = Depends(get_db
 
     user_resp = UserResponse(
         id=f"panel:{user.id}",
-        email=f"{user.username}@local",
+        email=getattr(user, "email", None) or f"{user.username}@local",
         name=user.username,
         role="admin",
         last_login=now,
@@ -92,6 +117,59 @@ async def local_login(data: LocalLoginRequest, db: AsyncSession = Depends(get_db
     )
 
     return LocalLoginResponse(token=token, user=user_resp)
+
+
+@router.post("/password-reset/request")
+async def password_reset_request(
+    data: PasswordResetRequestIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await ensure_schema()
+    from services.password_reset import request_password_reset
+
+    return await request_password_reset(
+        db,
+        username=data.username,
+        channel=data.channel,
+        request_ip=_client_ip(request),
+    )
+
+
+@router.post("/password-reset/confirm")
+async def password_reset_confirm(
+    data: PasswordResetConfirmIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await ensure_schema()
+    from services.password_reset import confirm_password_reset
+
+    return await confirm_password_reset(
+        db,
+        username=data.username,
+        otp=data.otp,
+        new_password=data.new_password,
+        request_ip=_client_ip(request),
+    )
+
+
+@router.post("/password-reset/super-admin")
+async def password_reset_super_admin(
+    data: SuperAdminRecoveryIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Emergency Super Admin reset via SUPER_ADMIN_RECOVERY_SECRET (ops-only)."""
+    await ensure_schema()
+    from services.password_reset import super_admin_emergency_reset
+
+    return await super_admin_emergency_reset(
+        db,
+        recovery_secret=data.recovery_secret,
+        new_password=data.new_password,
+        request_ip=_client_ip(request),
+    )
 
 
 @router.get("/me", response_model=UserResponse)
@@ -121,6 +199,7 @@ async def get_current_user_info(
         is_super_admin=is_super,
         permissions=perms,
     )
+
 
 @router.post("/logout")
 @router.get("/logout")

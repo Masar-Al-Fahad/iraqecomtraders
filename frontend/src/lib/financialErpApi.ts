@@ -1,7 +1,7 @@
 import { client, downloadAuthorizedBlob, downloadAuthorizedFile, getApiBase, localAuth } from '@/lib/localApi';
 import type {
   AccountItem, Attachment, Company, Expense, FinancialAccess, MemberAccount, MemberOption,
-  FinancialBackup, PricingItem, ReportLine, Revenue, ServiceType, Settlement, StatementGridRow,
+  FinancialBackup, PricingItem, ReportLine, Revenue, ServiceType, Settlement, StatementGridRow, VoucherNumbers,
 } from '@/types/financialErp';
 
 const invoke = async <T>(url:string, method='GET', data?:unknown): Promise<T> =>
@@ -53,6 +53,8 @@ export const financialErpApi = {
   createPricingVersion:(itemId:number,data:unknown)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}/versions`,'POST',data),
   pricingVersions:(itemId:number)=>invoke<{items:any[]}>(`/api/v1/admin/financial/pricing-items/${itemId}/versions`),
   setPricingItemStatus:(itemId:number,is_active:boolean)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}/status`,'PATCH',{is_active}),
+  deletePricingItem:(itemId:number)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}`,'DELETE'),
+  deleteMemberAccount:(id:number)=>invoke<{id:number;archived:boolean;message?:string;linked_entry_lines?:number}>(`/api/v1/admin/financial/member-accounts/${id}`,'DELETE'),
   primaryContract:(companyId:number)=>invoke<{
     company_id:number;contract_id:number|null;version:number|null;contract_number:string;signed_at:string|null;
     effective_from:string|null;effective_to:string|null;notes:string;
@@ -95,19 +97,21 @@ export const financialErpApi = {
   reverseSettlement:(id:number,reason:string)=>invoke(`/api/v1/admin/financial/settlements/${id}/reverse`,'POST',{reason}),
   settlementLines:(id:number)=>invoke<{items:any[]}>(`/api/v1/admin/financial/settlements/${id}/lines`),
   revenues: (filters:Record<string,unknown>={}) => invoke<{items:Revenue[]}>(`/api/v1/admin/financial/revenues?${qs(filters)}`),
-  createRevenue: (data:unknown) => invoke('/api/v1/admin/financial/revenues','POST',data),
-  updateRevenue:(id:number,data:unknown)=>invoke(`/api/v1/admin/financial/revenues/${id}`,'PUT',data),
-  deleteRevenue:(id:number)=>invoke(`/api/v1/admin/financial/revenues/${id}`,'DELETE'),
+  createRevenue: (data:unknown) => invoke<{id:number;receipt_number:string}>('/api/v1/admin/financial/revenues','POST',data),
+  updateRevenue:(id:number,data:unknown)=>invoke<{id:number;receipt_number:string}>(`/api/v1/admin/financial/revenues/${id}`,'PUT',data),
+  deleteRevenue:(id:number)=>invoke<{id:number;status:string;receipt_number?:string}>(`/api/v1/admin/financial/revenues/${id}`,'DELETE'),
   restoreRevenue:(id:number)=>invoke(`/api/v1/admin/financial/revenues/${id}/restore`,'POST'),
   allocationTargets:(id:number)=>invoke<any>(`/api/v1/admin/financial/revenues/${id}/allocation-targets`),
   allocations:(id:number)=>invoke<{items:any[]}>(`/api/v1/admin/financial/revenues/${id}/allocations`),
   allocateRevenue:(id:number,data:unknown)=>invoke(`/api/v1/admin/financial/revenues/${id}/allocations`,'POST',data),
   exportRevenues:(filters:Record<string,unknown>)=>downloadAuthorizedFile(`/api/v1/admin/financial/revenues.xlsx?${qs(filters)}`,'mfec-revenues.xlsx'),
   expenses:(filters:Record<string,unknown>={})=>invoke<{items:Expense[]}>(`/api/v1/admin/financial/expenses?${qs(filters)}`),
-  saveExpense:(data:unknown,id?:number)=>invoke(id?`/api/v1/admin/financial/expenses/${id}`:'/api/v1/admin/financial/expenses',id?'PUT':'POST',data),
-  deleteExpense:(id:number)=>invoke(`/api/v1/admin/financial/expenses/${id}`,'DELETE'),
+  saveExpense:(data:unknown,id?:number)=>invoke<{id:number;payment_number?:string}>(id?`/api/v1/admin/financial/expenses/${id}`:'/api/v1/admin/financial/expenses',id?'PUT':'POST',data),
+  deleteExpense:(id:number)=>invoke<{id:number;status:string;payment_number?:string}>(`/api/v1/admin/financial/expenses/${id}`,'DELETE'),
   restoreExpense:(id:number)=>invoke(`/api/v1/admin/financial/expenses/${id}/restore`,'POST'),
   exportExpenses:(filters:Record<string,unknown>)=>downloadAuthorizedFile(`/api/v1/admin/financial/expenses.xlsx?${qs(filters)}`,'mfec-expenses.xlsx'),
+  voucherNumbers:()=>invoke<VoucherNumbers>('/api/v1/admin/financial/voucher-numbers'),
+  setVoucherNumbers:(data:{next_rec?:number;next_pay?:number})=>invoke<VoucherNumbers>('/api/v1/admin/financial/voucher-numbers','PUT',data),
   backups:(includeDeleted=false)=>invoke<{items:FinancialBackup[]}>(`/api/v1/admin/financial/backups?${qs({include_deleted:includeDeleted})}`),
   createBackup:(notes:string)=>invoke<FinancialBackup>('/api/v1/admin/financial/backups','POST',{notes:notes||null}),
   downloadBackup:(id:number,number:string)=>downloadAuthorizedBlob(`/api/v1/admin/financial/backups/${id}/download`,`${number}.json.gz`),

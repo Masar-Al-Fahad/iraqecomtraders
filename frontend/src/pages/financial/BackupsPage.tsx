@@ -19,9 +19,9 @@ export function BackupsPage({can,notify,success}:Props){
   const load=async()=>{try{setRows((await financialErpApi.backups()).items)}catch(e){notify(e)}};
   useEffect(()=>{void load()},[]);
   const create=async()=>{setBusy(true);try{await financialErpApi.createBackup(notes);setNotes('');await load();success('تم إنشاء النسخة الاحتياطية وحفظها في التخزين الخاص')}catch(e){notify(e)}finally{setBusy(false)}};
-  const requestRestore=async()=>{if(!restore)return;try{await financialErpApi.requestRestore(restore.id,confirmation,restoreNotes);setRestore(undefined);setConfirmation('');setRestoreNotes('');await load();success('تم تسجيل طلب الاستعادة وإنشاء نسخة تلقائية للحالة الحالية')}catch(e){notify(e)}};
+  const requestRestore=async()=>{if(!restore)return;if(!restoreNotes.trim()){notify(new Error('سبب الاستعادة مطلوب'));return}try{await financialErpApi.requestRestore(restore.id,confirmation,restoreNotes);setRestore(undefined);setConfirmation('');setRestoreNotes('');await load();success('تم تسجيل طلب الاستعادة فقط — لم تُستبدل قاعدة البيانات. راجع الحالة «طلب استعادة» في الجدول.')}catch(e){notify(e)}};
   return <div className="space-y-4">
-    <PageTitle title="النسخ الاحتياطية" description="نسخ منطقية خاصة ومشفرة بالنقل؛ الاستعادة طلب مراجعة ولا تنفذ تلقائيًا داخل التطبيق."/>
+    <PageTitle title="النسخ الاحتياطية" description="إنشاء النسخ يعمل داخل التطبيق. الاستعادة ليست تنفيذًا تلقائيًا لقاعدة البيانات — الزر يسجّل طلبًا تشغيليًا فقط."/>
     <Card><CardContent className="p-4 grid md:grid-cols-[1fr_auto] gap-3 items-end">
       <div><Label>ملاحظات النسخة</Label><Input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="سبب إنشاء النسخة أو وصفها"/></div>
       {can('backups.create')&&<Button type="button" disabled={busy} onClick={create}><Plus className="w-4 h-4 ml-2"/>{busy?'جاري الإنشاء...':'إنشاء نسخة احتياطية الآن'}</Button>}
@@ -40,12 +40,25 @@ export function BackupsPage({can,notify,success}:Props){
       </tr>)}
       {!rows.length&&<tr><td colSpan={7}><Empty title="لا توجد نسخ احتياطية" description="أنشئ أول نسخة من الزر أعلاه."/></td></tr>}
     </CompactTable>
-    <Card><CardContent className="p-4 flex gap-3 text-sm text-amber-800 bg-amber-50"><Archive className="w-5 h-5 shrink-0"/><p>للسلامة، طلب الاستعادة ينشئ أولًا نسخة تلقائية جديدة ويسجل الطلب في Audit Log. التنفيذ الفعلي يحتاج مراجعة تشغيلية خارج التطبيق ولا يكشف DATABASE_URL.</p></CardContent></Card>
+    <Card><CardContent className="p-4 space-y-2 text-sm text-amber-900 bg-amber-50">
+      <div className="flex gap-3"><Archive className="w-5 h-5 shrink-0"/><div>
+        <p className="font-bold">ما الذي يفعله زر «طلب استعادة»؟</p>
+        <ul className="list-disc pr-5 mt-1 space-y-1">
+          <li>يتحقق من تأكيد <b dir="ltr">RESTORE</b> وسبب الاستعادة.</li>
+          <li>ينشئ نسخة تلقائية <b>قبل الطلب</b> (pre_restore) للحالة الحالية.</li>
+          <li>يسجّل الطلب في Audit Log ويغيّر حالة النسخة إلى «طلب استعادة».</li>
+          <li><b>لا يستبدل قاعدة البيانات ولا يشغّل pg_restore داخل التطبيق</b> — التنفيذ الحقيقي يحتاج إجراءً تشغيليًا خارج التطبيق (Railway/Supabase) باستخدام ملف النسخة المنزَّل.</li>
+        </ul>
+      </div></div>
+    </CardContent></Card>
     <FormDialog open={!!restore} onOpenChange={open=>!open&&setRestore(undefined)} title={`طلب استعادة ${restore?.backup_number||''}`}>
-      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">هذا إجراء حساس. اكتب <b dir="ltr">RESTORE</b> حرفيًا. لن يتم استبدال قاعدة البيانات تلقائيًا؛ سيُنشأ Backup سابق للطلب.</div>
+      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 space-y-2">
+        <p>هذا <b>طلب مراجعة</b> وليس استعادة فورية لقاعدة البيانات.</p>
+        <p>اكتب <b dir="ltr">RESTORE</b> حرفيًا. سيُنشأ Backup تلقائي للحالة الحالية قبل تسجيل الطلب.</p>
+      </div>
       <div><Label>رمز التأكيد</Label><Input dir="ltr" value={confirmation} onChange={e=>setConfirmation(e.target.value)} placeholder="RESTORE"/></div>
-      <div><Label>سبب الاستعادة</Label><Textarea value={restoreNotes} onChange={e=>setRestoreNotes(e.target.value)}/></div>
-      <Button type="button" variant="destructive" disabled={confirmation!=='RESTORE'} onClick={requestRestore}>تأكيد طلب الاستعادة</Button>
+      <div><Label>سبب الاستعادة (مطلوب)</Label><Textarea value={restoreNotes} onChange={e=>setRestoreNotes(e.target.value)} placeholder="مثال: استعادة بعد خطأ إدخال بتاريخ..."/></div>
+      <Button type="button" variant="destructive" disabled={confirmation!=='RESTORE'||!restoreNotes.trim()} onClick={requestRestore}>تسجيل طلب الاستعادة (بدون تنفيذ DB)</Button>
     </FormDialog>
   </div>;
 }

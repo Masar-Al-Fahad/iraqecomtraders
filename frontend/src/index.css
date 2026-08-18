@@ -99,3 +99,30 @@
     font-family: 'Tajawal', sans-serif;
   }
 }
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+  html, body {
+    background: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .report-print-root table {
+    width: 100% !important;
+    table-layout: fixed !important;
+    font-size: 9px !important;
+  }
+  .report-print-root th,
+  .report-print-root td {
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    padding: 4px !important;
+  }
+  .report-print-root .overflow-auto {
+    overflow: visible !important;
+  }
+}

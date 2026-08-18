@@ -168,6 +168,7 @@ async def ensure_schema():
         # Ensure SystemCounter model is registered on Base.metadata
         from services.membership_numbers import SystemCounter  # noqa: F401
         from models.app_settings import AppSetting  # noqa: F401
+        from models.password_reset import PasswordResetOtp  # noqa: F401
         from models.financial import (  # noqa: F401
             AccountingPeriod,
             CompanyContract,
@@ -299,7 +300,7 @@ async def ensure_schema():
                     except Exception as idx_err:
                         logger.warning("Could not ensure index (%s): %s", idx_sql, idx_err)
 
-                # is_super_admin on panel_users
+                # is_super_admin + recovery contacts on panel_users
                 if dialect == "sqlite":
                     rows = sync_conn.execute(text("PRAGMA table_info(panel_users)")).fetchall()
                     col_names = {row[1] for row in rows}
@@ -307,11 +308,22 @@ async def ensure_schema():
                         sync_conn.execute(
                             text("ALTER TABLE panel_users ADD COLUMN is_super_admin BOOLEAN DEFAULT 0")
                         )
+                    if "email" not in col_names:
+                        sync_conn.execute(text("ALTER TABLE panel_users ADD COLUMN email VARCHAR(255)"))
+                    if "phone" not in col_names:
+                        sync_conn.execute(text("ALTER TABLE panel_users ADD COLUMN phone VARCHAR(40)"))
+                    if "recovery_preferred" not in col_names:
+                        sync_conn.execute(text("ALTER TABLE panel_users ADD COLUMN recovery_preferred VARCHAR(20)"))
                 elif dialect == "postgresql":
                     sync_conn.execute(
                         text(
                             "ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT FALSE"
                         )
+                    )
+                    sync_conn.execute(text("ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"))
+                    sync_conn.execute(text("ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS phone VARCHAR(40)"))
+                    sync_conn.execute(
+                        text("ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS recovery_preferred VARCHAR(20)")
                     )
 
             await conn.run_sync(_migrate)

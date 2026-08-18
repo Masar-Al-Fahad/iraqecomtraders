@@ -78,6 +78,9 @@ interface PanelUser {
   username: string;
   permissions: Permissions;
   is_active: boolean;
+  email?: string | null;
+  phone?: string | null;
+  recovery_preferred?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -151,6 +154,9 @@ export default function UsersManagement() {
   const [saving, setSaving] = useState(false);
   const [formUsername, setFormUsername] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [formEmail, setFormEmail] = useState('');
+  const [formPhone, setFormPhone] = useState('');
+  const [formRecovery, setFormRecovery] = useState('auto');
   const [formPermissions, setFormPermissions] = useState<Permissions>(emptyPermissions());
   const [formActive, setFormActive] = useState(true);
 
@@ -229,6 +235,9 @@ export default function UsersManagement() {
     setEditingUser(null);
     setFormUsername('');
     setFormPassword('');
+    setFormEmail('');
+    setFormPhone('');
+    setFormRecovery('auto');
     setFormPermissions(emptyPermissions());
     setFormActive(true);
     setDialogOpen(true);
@@ -238,6 +247,9 @@ export default function UsersManagement() {
     setEditingUser(user);
     setFormUsername(user.username);
     setFormPassword('');
+    setFormEmail(user.email || '');
+    setFormPhone(user.phone || '');
+    setFormRecovery(user.recovery_preferred || 'auto');
     setFormPermissions({ ...emptyPermissions(), ...user.permissions });
     setFormActive(user.is_active);
     setDialogOpen(true);
@@ -264,6 +276,9 @@ export default function UsersManagement() {
           username: formUsername.trim(),
           permissions: formPermissions,
           is_active: formActive,
+          email: formEmail.trim() || null,
+          phone: formPhone.trim() || null,
+          recovery_preferred: formRecovery || 'auto',
         };
         if (formPassword.trim()) {
           payload.password = formPassword;
@@ -283,6 +298,9 @@ export default function UsersManagement() {
             password: formPassword,
             permissions: formPermissions,
             is_active: formActive,
+            email: formEmail.trim() || null,
+            phone: formPhone.trim() || null,
+            recovery_preferred: formRecovery || 'auto',
           },
         });
         toast({ title: 'تمت الإضافة', description: 'تم إنشاء المستخدم بنجاح' });
@@ -521,6 +539,24 @@ export default function UsersManagement() {
                 className="text-right"
                 placeholder={editingUser ? 'كلمة مرور جديدة (اختياري)' : 'أدخل كلمة المرور'}
               />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">البريد للاسترداد</Label>
+                <Input dir="ltr" value={formEmail} onChange={(e) => setFormEmail(e.target.value)} placeholder="user@example.com" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">الهاتف للاسترداد</Label>
+                <Input dir="ltr" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} placeholder="07xxxxxxxxx" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">قناة الاسترداد المفضلة</Label>
+              <select className="h-10 w-full border rounded-md px-3" value={formRecovery} onChange={(e) => setFormRecovery(e.target.value)}>
+                <option value="auto">تلقائي</option>
+                <option value="email">بريد</option>
+                <option value="phone">هاتف</option>
+              </select>
             </div>
             <div className="space-y-2">
               <Label className="text-sm font-medium">الصلاحيات</Label>

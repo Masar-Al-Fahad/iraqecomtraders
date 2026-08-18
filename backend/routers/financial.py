@@ -153,6 +153,10 @@ class ExpenseIn(BaseModel):
     expense_date: date
     accounting_year: int = Field(ge=2000, le=2200)
     accounting_month: int = Field(ge=1, le=12)
+    payee: Optional[str] = Field(default=None, max_length=200)
+    person_name: Optional[str] = Field(default=None, max_length=200)
+    company_name: Optional[str] = Field(default=None, max_length=200)
+    payment_method: Optional[str] = Field(default=None, max_length=80)
     category: str = Field(min_length=2, max_length=120)
     description: str = Field(min_length=2, max_length=500)
     amount: Decimal = Field(gt=0)
@@ -535,6 +539,7 @@ async def list_member_accounts(
         stmt = stmt.where(MemberCompanyAccount.company_id == company_id)
     if member_id:
         stmt = stmt.where(MemberCompanyAccount.member_id == member_id)
+    stmt = stmt.where(MemberCompanyAccount.deleted_at.is_(None))
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where(or_(
@@ -637,6 +642,46 @@ async def upsert_member_account(
     add_audit(db, action=action, entity_type="member_company_account", entity_id=item.id, actor=actor, old_values=old, new_values=payload)
     await db.commit()
     return {"id": item.id, "saved_items": len(data.items) if data.items is not None else None}
+
+
+@router.delete("/member-accounts/{account_id}")
+async def soft_delete_member_account(
+    account_id: int,
+    user: UserResponse = Depends(require_any_permission(
+        "manage_member_company_accounts", "financial.member_links.delete", "financial.member_links.edit",
+    )),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(MemberCompanyAccount, account_id)
+    if not item or item.deleted_at is not None:
+        raise HTTPException(404, "ارتباط العضو غير موجود")
+    from models.financial import MonthlyEntryLine
+    linked = (await db.execute(
+        select(func.count(MonthlyEntryLine.id)).where(MonthlyEntryLine.member_company_account_id == account_id)
+    )).scalar_one()
+    actor = await resolve_actor_name(db, user)
+    # Soft-archive keeps unique (member, company) and historical entry lines intact.
+    item.deleted_at = datetime.now()
+    item.deleted_by = actor
+    item.status = "inactive"
+    item.is_active = False
+    if not item.ended_at:
+        item.ended_at = date.today()
+    for link in (await db.execute(
+        select(MemberAccountItem).where(MemberAccountItem.account_id == account_id)
+    )).scalars().all():
+        link.is_active = False
+    add_audit(
+        db, action="member_account.archive", entity_type="member_company_account", entity_id=item.id,
+        actor=actor, new_values={"linked_entry_lines": int(linked or 0)},
+    )
+    await db.commit()
+    return {
+        "id": item.id,
+        "archived": True,
+        "linked_entry_lines": int(linked or 0),
+        "message": "تم أرشفة الارتباط دون حذف المعاملات التاريخية",
+    }
 
 
 @router.get("/monthly-entry")
@@ -840,10 +885,13 @@ async def list_expenses(
     rows = (await db.execute(stmt)).scalars().all()
     return {"items": [
         {
-            "id": x.id, "expense_date": _iso(x.expense_date), "accounting_year": x.accounting_year,
-            "accounting_month": x.accounting_month, "category": x.category,
-            "description": x.description, "amount": float(x.amount), "notes": x.notes,
-            "receipt_key": x.receipt_key, "created_by": x.created_by,
+            "id": x.id, "payment_number": x.payment_number, "expense_date": _iso(x.expense_date),
+            "accounting_year": x.accounting_year, "accounting_month": x.accounting_month,
+            "payee": x.payee, "person_name": getattr(x, "person_name", None),
+            "company_name": getattr(x, "company_name", None), "payment_method": x.payment_method,
+            "category": x.category, "description": x.description, "amount": float(x.amount),
+            "notes": x.notes, "receipt_key": x.receipt_key, "created_by": x.created_by,
+            "status": "cancelled" if x.deleted_at else "active",
             "deleted": bool(x.deleted_at), "deleted_at": _iso(x.deleted_at),
         } for x in rows
     ]}
@@ -855,13 +903,43 @@ async def create_expense(
     user: UserResponse = Depends(require_any_permission("enter_expenses", "financial.expenses.create")),
     db: AsyncSession = Depends(get_db),
 ):
+    from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+
+    from services.voucher_numbers import allocate_payment_number
+
     actor = await resolve_actor_name(db, user)
-    item = FinancialExpense(**data.model_dump(), created_by=actor, updated_by=actor)
-    db.add(item)
-    await db.flush()
-    add_audit(db, action="create", entity_type="expense", entity_id=item.id, actor=actor, new_values=data.model_dump())
-    await db.commit()
-    return {"id": item.id}
+    last_err: Exception | None = None
+    for _attempt in range(3):
+        try:
+            payment_number = await allocate_payment_number(db)
+            item = FinancialExpense(
+                **data.model_dump(),
+                payment_number=payment_number,
+                created_by=actor,
+                updated_by=actor,
+            )
+            db.add(item)
+            await db.flush()
+            add_audit(
+                db, action="create", entity_type="expense", entity_id=item.id, actor=actor,
+                new_values={**data.model_dump(), "payment_number": payment_number},
+            )
+            await db.commit()
+            return {"id": item.id, "payment_number": payment_number}
+        except IntegrityError as err:
+            await db.rollback()
+            last_err = err
+            continue
+        except (OperationalError, ProgrammingError) as err:
+            await db.rollback()
+            msg = str(getattr(err, "orig", err))
+            if any(k in msg.lower() for k in ("payment_number", "person_name", "company_name", "payee", "no such column", "does not exist")):
+                raise HTTPException(
+                    500,
+                    "فشل حفظ المصروف: مخطط قاعدة البيانات غير محدّث (migration 19e0f1a2b3c4). طبّق migrations ثم أعد المحاولة.",
+                ) from err
+            raise HTTPException(500, f"فشل حفظ المصروف: {msg}") from err
+    raise HTTPException(409, f"تعذر تخصيص رقم صرف فريد بعد عدة محاولات: {last_err}")
 
 
 @router.put("/expenses/{expense_id}")
@@ -873,7 +951,9 @@ async def update_expense(
 ):
     item = await db.get(FinancialExpense, expense_id)
     if not item:
-        raise HTTPException(404, "المصروف غير موجود")
+        raise HTTPException(404, "وصل الصرف غير موجود")
+    if item.deleted_at:
+        raise HTTPException(409, "لا يمكن تعديل وصل ملغى")
     actor = await resolve_actor_name(db, user)
     old = {k: _iso(getattr(item, k)) for k in data.model_dump()}
     for key, value in data.model_dump().items():
@@ -881,7 +961,7 @@ async def update_expense(
     item.updated_by = actor
     add_audit(db, action="update", entity_type="expense", entity_id=item.id, actor=actor, old_values=old, new_values=data.model_dump())
     await db.commit()
-    return {"id": item.id}
+    return {"id": item.id, "payment_number": item.payment_number}
 
 
 @router.get("/dashboard")
