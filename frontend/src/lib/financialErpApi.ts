@@ -55,6 +55,7 @@ export const financialErpApi = {
   setPricingItemStatus:(itemId:number,is_active:boolean)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}/status`,'PATCH',{is_active}),
   deletePricingItem:(itemId:number)=>invoke(`/api/v1/admin/financial/pricing-items/${itemId}`,'DELETE'),
   deleteMemberAccount:(id:number)=>invoke<{id:number;archived:boolean;message?:string;linked_entry_lines?:number}>(`/api/v1/admin/financial/member-accounts/${id}`,'DELETE'),
+  restoreMemberAccount:(id:number)=>invoke<{id:number;archived:boolean;message?:string}>(`/api/v1/admin/financial/member-accounts/${id}/restore`,'POST'),
   primaryContract:(companyId:number)=>invoke<{
     company_id:number;contract_id:number|null;version:number|null;contract_number:string;signed_at:string|null;
     effective_from:string|null;effective_to:string|null;notes:string;

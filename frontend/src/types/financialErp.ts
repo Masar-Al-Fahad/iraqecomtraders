@@ -19,6 +19,7 @@ export type MemberAccount = {
   governorate:string; company_id:number; company_name:string; service_type_name:string;
   registered_name?:string; registered_phone?:string; customer_code?:string; customer_portal_url?:string;
   started_at?:string; ended_at?:string; status:string; notes?:string; is_active:boolean;
+  archived?:boolean; deleted_at?:string; deleted_by?:string;
 };
 export type AccountItem = {
   id:number; pricing_item_id:number; name:string; unit:string; unit_price_override?:number;

@@ -92,6 +92,37 @@ async def test_password_reset_otp_happy_path(tmp_path: Path, monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_password_reset_status_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    monkeypatch.delenv("SMS_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("PASSWORD_RESET_DEV_ECHO", raising=False)
+    database_path = tmp_path / "pwd_status.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async def isolated_db_session():
+        async with session_maker() as session:
+            yield session
+
+    app = FastAPI()
+    app.include_router(auth_router)
+    app.dependency_overrides[get_db] = isolated_db_session
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        st = await client.get("/api/v1/auth/password-reset/status")
+        assert st.status_code == 200
+        body = st.json()
+        assert body["email_delivery_available"] is False
+        assert body["sms_delivery_available"] is False
+        assert body["dev_echo_enabled"] is False
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_super_admin_emergency_reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SUPER_ADMIN_RECOVERY_SECRET", "ops-recovery-secret-xyz")
     database_path = tmp_path / "sa_reset.db"

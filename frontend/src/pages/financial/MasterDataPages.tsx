@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, Download, Edit3, ExternalLink, Eye, FileText, History, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Download, Edit3, ExternalLink, Eye, FileText, History, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -476,15 +476,15 @@ const blankAccount={member_id:'',company_id:'',registered_name:'',registered_pho
 export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Common,'services'|'reloadCompanies'>&{finance:boolean}){
   const [accounts,setAccounts]=useState<MemberAccount[]>([]);const [members,setMembers]=useState<MemberOption[]>([]);
   const [summaries,setSummaries]=useState<Record<number,AccountItem[]>>({});
-  const [search,setSearch]=useState('');const [companyFilter,setCompanyFilter]=useState('');const [selected,setSelected]=useState<MemberAccount>();
+  const [search,setSearch]=useState('');const [companyFilter,setCompanyFilter]=useState('');const [archiveFilter,setArchiveFilter]=useState<'active'|'archived'|'all'>('active');const [selected,setSelected]=useState<MemberAccount>();
   const [open,setOpen]=useState(false);const [form,setForm]=useState<any>(blankAccount);const [pricing,setPricing]=useState<PricingItem[]>([]);
   const [items,setItems]=useState<AccountItem[]>([]);const [annexes,setAnnexes]=useState<Attachment[]>([]);const [annexDate,setAnnexDate]=useState(date());
   const [customOverrides,setCustomOverrides]=useState<Record<number,boolean>>({});const [saving,setSaving]=useState(false);const [loadingPricing,setLoadingPricing]=useState(false);
   const selectedCompany=companies.find(company=>String(company.id)===String(form.company_id));
-  const load=async()=>{try{const x=await financialErpApi.memberAccounts(financialErpApi.query({company_id:companyFilter,search}));setAccounts(x.items);
-    const pairs=await Promise.all(x.items.map(async a=>[a.id,(await financialErpApi.accountItems(a.id)).items] as const));setSummaries(Object.fromEntries(pairs));
+  const load=async()=>{try{const x=await financialErpApi.memberAccounts(financialErpApi.query({company_id:companyFilter,search,archive_status:archiveFilter}));setAccounts(x.items);
+    const pairs=await Promise.all(x.items.filter(a=>!a.archived).map(async a=>[a.id,(await financialErpApi.accountItems(a.id)).items] as const));setSummaries(Object.fromEntries(pairs));
   }catch(e){notify(e)}};
-  useEffect(()=>{load()},[companyFilter]);useEffect(()=>{if(can('financial.member_links.create'))financialErpApi.members().then(x=>setMembers(x.items)).catch(notify)},[]);
+  useEffect(()=>{load()},[companyFilter,archiveFilter]);useEffect(()=>{if(can('financial.member_links.create'))financialErpApi.members().then(x=>setMembers(x.items)).catch(notify)},[]);
   const openAccount=async(account?:MemberAccount)=>{setSelected(account);setForm(account?{...blankAccount,...account,member_id:String(account.member_id),company_id:String(account.company_id)}:blankAccount);setOpen(true);
     if(account){const [p,i,a]=await Promise.all([financialErpApi.pricingItems(account.company_id),financialErpApi.accountItems(account.id),financialErpApi.annexes(account.id)]);setPricing(p.items);setItems(i.items);setCustomOverrides(Object.fromEntries(i.items.map(item=>[item.pricing_item_id,item.unit_price_override!=null||item.mfec_share_type_override!=null||item.mfec_share_value_override!=null])));setAnnexes(a.items)}else{setPricing([]);setItems([]);setCustomOverrides({});setAnnexes([])}};
   const chooseCompany=async(companyId:string)=>{setForm({...form,company_id:companyId});setPricing([]);setItems([]);setCustomOverrides({});if(!companyId)return;setLoadingPricing(true);try{const response=await financialErpApi.pricingItems(Number(companyId));setPricing(response.items)}catch(e){notify(e)}finally{setLoadingPricing(false)}};
@@ -495,7 +495,7 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
       items:items.map(item=>({pricing_item_id:item.pricing_item_id,unit_price_override:customOverrides[item.pricing_item_id]?item.unit_price_override??null:null,
         mfec_share_type_override:customOverrides[item.pricing_item_id]?item.mfec_share_type_override||null:null,mfec_share_value_override:customOverrides[item.pricing_item_id]?item.mfec_share_value_override??null:null,is_active:true}))};
     const result=await financialErpApi.saveMemberAccount(payload);
-    const [accountResponse,itemResponse]=await Promise.all([financialErpApi.memberAccounts(financialErpApi.query({member_id:payload.member_id,company_id:payload.company_id})),financialErpApi.accountItems(result.id)]);
+    const [accountResponse,itemResponse]=await Promise.all([financialErpApi.memberAccounts(financialErpApi.query({member_id:payload.member_id,company_id:payload.company_id,archive_status:'all'})),financialErpApi.accountItems(result.id)]);
     const fresh=accountResponse.items.find(account=>account.id===result.id);if(!fresh||itemResponse.items.length!==items.length)throw new Error('أعاد الخادم نجاح الحفظ لكن الحساب أو فقراته لم تظهر بعد إعادة التحميل');
     setSelected(fresh);setItems(itemResponse.items);setCustomOverrides(Object.fromEntries(itemResponse.items.map(item=>[item.pricing_item_id,item.unit_price_override!=null||item.mfec_share_type_override!=null||item.mfec_share_value_override!=null])));await load();
     success(`تم حفظ الحساب و${itemResponse.items.length} فقرة والتحقق من الأسعار الفعالة`);
@@ -503,9 +503,18 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
   const toggleItem=(p:PricingItem,checked:boolean)=>setItems(old=>checked?[...old,{id:0,pricing_item_id:p.id,name:p.name,unit:p.unit,is_active:true,effective_unit_price:p.current_version?.company_unit_price,effective_mfec_share_type:p.current_version?.mfec_share_type,effective_mfec_share_value:p.current_version?.mfec_share_value}]:old.filter(x=>x.pricing_item_id!==p.id));
   const uploadAnnex=async(file:File,replacedId?:number)=>{if(!selected)return;try{const up=await financialErpApi.upload('annexes',file);await financialErpApi.addAnnex(selected.id,{...up,original_filename:file.name,mime_type:file.type,size_bytes:file.size,signed_at:annexDate||null,replaced_id:replacedId||null});setAnnexes((await financialErpApi.annexes(selected.id)).items);success('تم رفع ملحق الاتفاق الثلاثي')}catch(e){notify(e)}};
   return <div className="space-y-4">
-    <PageTitle title="ارتباطات الأعضاء" description="حسابات الأعضاء لدى الشركات، الفقرات الفعالة، الاستثناءات والملحق الثلاثي." actions={can('financial.member_links.create')&&<Button onClick={()=>openAccount()}><Plus className="w-4 h-4 ml-2"/>ارتباط جديد</Button>}/>
-    <Card><CardContent className="p-3 flex gap-2 flex-wrap"><SearchBox value={search} onChange={setSearch} placeholder="العضو، رقم العضوية، كود العميل..."/><Button variant="outline" onClick={load}>بحث</Button><select className="h-10 border rounded-md px-3" value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)}><option value="">كل الشركات</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></CardContent></Card>
-    <CompactTable headers={['العضو / النشاط','المحافظة','الشركة / الخدمة','الفقرات الفعالة','بيانات التسجيل','بدء الارتباط','الحالة','الرابط','']}>{accounts.map(a=><tr key={a.id} className="border-t"><td className="p-3"><b>{a.member_name}</b><small className="block">{a.business_name} · {a.membership_number}</small></td><td>{a.governorate}</td><td>{a.company_name}<small className="block">{a.service_type_name}</small></td><td>{summaries[a.id]?.map(x=><div key={x.id}>{x.name} ({x.unit}){finance&&<small> · {money(x.effective_unit_price)} / {x.effective_mfec_share_type==='percentage'?`${x.effective_mfec_share_value}%`:money(x.effective_mfec_share_value)}</small>}</div>)||'-'}</td><td>{a.registered_name||'-'}<small className="block">{a.registered_phone} · {a.customer_code}</small></td><td>{a.started_at||'-'}</td><td><StatusBadge value={a.status}/></td><td>{a.customer_portal_url&&<Button size="sm" variant="outline" onClick={()=>window.open(a.customer_portal_url,'_blank','noopener,noreferrer')}><ExternalLink className="w-4 h-4"/></Button>}</td><td><Button size="sm" variant="ghost" onClick={()=>openAccount(a)}><Edit3 className="w-4 h-4"/></Button></td></tr>)}</CompactTable>
+    <PageTitle title="ارتباطات الأعضاء" description="حسابات الأعضاء لدى الشركات، الفقرات الفعالة، الاستثناءات والملحق الثلاثي. الأرشفة Soft Delete ولا تمسح التاريخ المالي." actions={can('financial.member_links.create')&&archiveFilter!=='archived'&&<Button onClick={()=>openAccount()}><Plus className="w-4 h-4 ml-2"/>ارتباط جديد</Button>}/>
+    <Card><CardContent className="p-3 flex gap-2 flex-wrap items-center">
+      <SearchBox value={search} onChange={setSearch} placeholder="العضو، رقم العضوية، كود العميل..."/>
+      <Button variant="outline" onClick={load}>بحث</Button>
+      <select className="h-10 border rounded-md px-3" value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)}><option value="">كل الشركات</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+      <div className="flex gap-1 border rounded-md p-1 bg-slate-50">
+        {([['active','فعال'],['archived','مؤرشف'],['all','الكل']] as const).map(([value,label])=>
+          <Button key={value} type="button" size="sm" variant={archiveFilter===value?'default':'ghost'} onClick={()=>setArchiveFilter(value)}>{label}</Button>
+        )}
+      </div>
+    </CardContent></Card>
+    <CompactTable headers={['العضو / النشاط','المحافظة','الشركة / الخدمة','الفقرات الفعالة','بيانات التسجيل','بدء الارتباط','الأرشفة','الحالة','الرابط','']}>{accounts.map(a=><tr key={a.id} className={`border-t ${a.archived?'opacity-70 bg-amber-50/40':''}`}><td className="p-3"><b>{a.member_name}</b><small className="block">{a.business_name} · {a.membership_number}</small></td><td>{a.governorate}</td><td>{a.company_name}<small className="block">{a.service_type_name}</small></td><td>{a.archived?'—':(summaries[a.id]?.map(x=><div key={x.id}>{x.name} ({x.unit}){finance&&<small> · {money(x.effective_unit_price)} / {x.effective_mfec_share_type==='percentage'?`${x.effective_mfec_share_value}%`:money(x.effective_mfec_share_value)}</small>}</div>)||'-')}</td><td>{a.registered_name||'-'}<small className="block">{a.registered_phone} · {a.customer_code}</small></td><td>{a.started_at||'-'}</td><td>{a.archived?<>{a.deleted_at?new Date(a.deleted_at).toLocaleString('ar-IQ'):'-'}<small className="block">بواسطة: {a.deleted_by||'-'}</small></>:'—'}</td><td><StatusBadge value={a.archived?'cancelled':a.status}/></td><td>{a.customer_portal_url&&<Button size="sm" variant="outline" onClick={()=>window.open(a.customer_portal_url,'_blank','noopener,noreferrer')}><ExternalLink className="w-4 h-4"/></Button>}</td><td className="flex gap-1"><Button size="sm" variant="ghost" onClick={()=>openAccount(a)}><Edit3 className="w-4 h-4"/></Button>{a.archived&&can('financial.member_links.edit')&&<Button size="sm" variant="outline" onClick={async()=>{try{const x=await financialErpApi.restoreMemberAccount(a.id);await load();success(x.message||'تمت الاستعادة')}catch(e){notify(e)}}}><RotateCcw className="w-4 h-4 ml-1"/>استعادة</Button>}</td></tr>)}</CompactTable>
     <FormDialog open={open} onOpenChange={setOpen} title={selected?`حساب ${selected.member_name} لدى ${selected.company_name}`:'ارتباط عضو بشركة'} className="max-w-5xl">
       <div className="grid md:grid-cols-3 gap-3"><Field label="العضو"><select disabled={!!selected} className="w-full h-10 border rounded-md px-3" value={form.member_id} onChange={e=>setForm({...form,member_id:e.target.value})}><option value="">اختر</option>{members.map(m=><option key={m.id} value={m.id}>{m.membership_number} · {m.member_name} · {m.business_name}</option>)}</select></Field>
         <Field label="الشركة"><select disabled={!!selected} className="w-full h-10 border rounded-md px-3" value={form.company_id} onChange={e=>void chooseCompany(e.target.value)}><option value="">اختر</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
@@ -526,7 +535,7 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
             {custom&&<div className="grid md:grid-cols-3 gap-2"><Field label="سعر الوحدة الخاص (اختياري)"><Input type="number" placeholder={String(version?.company_unit_price??'')} value={item.unit_price_override??''} onChange={e=>setItems(xs=>xs.map(x=>x.pricing_item_id===p.id?{...x,unit_price_override:e.target.value===''?undefined:Number(e.target.value)}:x))}/></Field><Field label="نوع الحصة الخاصة (اختياري)"><select className="h-10 w-full border rounded-md px-2" value={item.mfec_share_type_override||''} onChange={e=>setItems(xs=>xs.map(x=>x.pricing_item_id===p.id?{...x,mfec_share_type_override:(e.target.value||undefined) as any}:x))}><option value="">حصة الشركة</option><option value="fixed">ثابت</option><option value="percentage">نسبة</option></select></Field><Field label="قيمة الحصة الخاصة (اختياري)"><Input type="number" placeholder={String(version?.mfec_share_value??'')} value={item.mfec_share_value_override??''} onChange={e=>setItems(xs=>xs.map(x=>x.pricing_item_id===p.id?{...x,mfec_share_value_override:e.target.value===''?undefined:Number(e.target.value)}:x))}/></Field></div>}</>}
         </div>})}</div>}
       {can(selected?'financial.member_links.edit':'financial.member_links.create')&&<Button type="button" disabled={saving||loadingPricing} onClick={save}>{saving?'جاري الحفظ والتحقق...':'حفظ الحساب والفقرات'}</Button>}
-      {selected&&can('financial.member_links.delete')&&<Button type="button" variant="destructive" disabled={saving} onClick={async()=>{
+      {selected&&!selected.archived&&can('financial.member_links.delete')&&<Button type="button" variant="destructive" disabled={saving} onClick={async()=>{
         if(!confirm(`أرشفة ارتباط ${selected.member_name} لدى ${selected.company_name}؟ لن تُحذف المعاملات التاريخية.`))return;
         try{
           const x=await financialErpApi.deleteMemberAccount(selected.id);
@@ -534,7 +543,10 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
           success(x.message||'تمت أرشفة الارتباط');
         }catch(e){notify(e)}
       }}>أرشفة الارتباط</Button>}
-      {selected&&!can('financial.member_links.delete')&&can('financial.member_links.edit')&&<Button type="button" variant="outline" disabled={saving} onClick={async()=>{
+      {selected&&selected.archived&&can('financial.member_links.edit')&&<Button type="button" variant="outline" disabled={saving} onClick={async()=>{
+        try{const x=await financialErpApi.restoreMemberAccount(selected.id);setOpen(false);await load();success(x.message||'تمت الاستعادة')}catch(e){notify(e)}
+      }}><RotateCcw className="w-4 h-4 ml-1"/>استعادة الارتباط إلى Active</Button>}
+      {selected&&!selected.archived&&!can('financial.member_links.delete')&&can('financial.member_links.edit')&&<Button type="button" variant="outline" disabled={saving} onClick={async()=>{
         setForm((f:any)=>({...f,status:'inactive',is_active:false,ended_at:f.ended_at||new Date().toISOString().slice(0,10)}));
         success('حدّد الحالة غير فعال وتاريخ الانتهاء ثم احفظ للأرشفة');
       }}>تعيين للأرشفة ثم احفظ</Button>}

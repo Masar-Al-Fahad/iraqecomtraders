@@ -142,6 +142,19 @@ export const client = {
       if (!res.ok) throw Object.assign(new Error(await readError(res)), { status: res.status });
       return res.json();
     },
+    async passwordResetStatus() {
+      const res = await fetch(`${apiBase()}/api/v1/auth/password-reset/status`);
+      if (!res.ok) throw Object.assign(new Error(await readError(res)), { status: res.status });
+      return res.json() as Promise<{
+        email_delivery_available: boolean;
+        sms_delivery_available: boolean;
+        otp_ttl_minutes: number;
+        max_verify_attempts: number;
+        dev_echo_enabled: boolean;
+        super_admin_recovery_configured: boolean;
+        message: string;
+      }>;
+    },
     async confirmPasswordReset(username: string, otp: string, new_password: string) {
       const res = await fetch(`${apiBase()}/api/v1/auth/password-reset/confirm`, {
         method: 'POST',

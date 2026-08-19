@@ -119,6 +119,14 @@ async def local_login(data: LocalLoginRequest, db: AsyncSession = Depends(get_db
     return LocalLoginResponse(token=token, user=user_resp)
 
 
+@router.get("/password-reset/status")
+async def password_reset_status():
+    """System-level delivery readiness (no user enumeration)."""
+    from services.password_reset import delivery_status
+
+    return delivery_status()
+
+
 @router.post("/password-reset/request")
 async def password_reset_request(
     data: PasswordResetRequestIn,

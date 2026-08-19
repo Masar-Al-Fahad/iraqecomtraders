@@ -522,6 +522,7 @@ async def list_member_accounts(
     company_id: Optional[int] = None,
     member_id: Optional[int] = None,
     search: Optional[str] = None,
+    archive_status: Literal["active", "archived", "all"] = "active",
     _user: UserResponse = Depends(require_any_permission(
         "monthly_entry", "view_companies", "manage_member_company_accounts",
         "financial.monthly.view", "financial.member_links.view",
@@ -539,7 +540,10 @@ async def list_member_accounts(
         stmt = stmt.where(MemberCompanyAccount.company_id == company_id)
     if member_id:
         stmt = stmt.where(MemberCompanyAccount.member_id == member_id)
-    stmt = stmt.where(MemberCompanyAccount.deleted_at.is_(None))
+    if archive_status == "active":
+        stmt = stmt.where(MemberCompanyAccount.deleted_at.is_(None))
+    elif archive_status == "archived":
+        stmt = stmt.where(MemberCompanyAccount.deleted_at.is_not(None))
     if search:
         term = f"%{search.strip()}%"
         stmt = stmt.where(or_(
@@ -557,6 +561,9 @@ async def list_member_accounts(
             "statement_url": a.statement_url, "customer_portal_url": a.customer_portal_url or a.statement_url,
             "started_at": _iso(a.started_at), "ended_at": _iso(a.ended_at), "status": a.status,
             "notes": a.notes, "is_active": a.is_active,
+            "archived": bool(a.deleted_at),
+            "deleted_at": _iso(a.deleted_at),
+            "deleted_by": a.deleted_by,
         } for a, m, c, s in rows
     ]}
 
@@ -682,6 +689,34 @@ async def soft_delete_member_account(
         "linked_entry_lines": int(linked or 0),
         "message": "تم أرشفة الارتباط دون حذف المعاملات التاريخية",
     }
+
+
+@router.post("/member-accounts/{account_id}/restore")
+async def restore_member_account(
+    account_id: int,
+    user: UserResponse = Depends(require_any_permission(
+        "manage_member_company_accounts", "financial.member_links.delete", "financial.member_links.edit",
+    )),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(MemberCompanyAccount, account_id)
+    if not item:
+        raise HTTPException(404, "ارتباط العضو غير موجود")
+    if item.deleted_at is None:
+        return {"id": item.id, "archived": False, "message": "الارتباط فعال مسبقًا"}
+    actor = await resolve_actor_name(db, user)
+    item.deleted_at = None
+    item.deleted_by = None
+    item.status = "active"
+    item.is_active = True
+    if item.ended_at:
+        item.ended_at = None
+    add_audit(
+        db, action="member_account.restore", entity_type="member_company_account", entity_id=item.id,
+        actor=actor,
+    )
+    await db.commit()
+    return {"id": item.id, "archived": False, "message": "تمت استعادة الارتباط إلى Active دون المساس بالتاريخ المالي"}
 
 
 @router.get("/monthly-entry")

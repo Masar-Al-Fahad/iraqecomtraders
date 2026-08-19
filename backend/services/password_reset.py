@@ -65,6 +65,22 @@ def _sms_configured() -> bool:
     return bool(os.getenv("SMS_WEBHOOK_URL"))
 
 
+def delivery_status() -> dict[str, Any]:
+    """Public, non-enumerating system readiness for OTP channels."""
+    return {
+        "email_delivery_available": _smtp_configured(),
+        "sms_delivery_available": _sms_configured(),
+        "otp_ttl_minutes": OTP_TTL_MINUTES,
+        "max_verify_attempts": MAX_VERIFY_ATTEMPTS,
+        "dev_echo_enabled": os.getenv("PASSWORD_RESET_DEV_ECHO", "").lower() in {"1", "true", "yes"},
+        "super_admin_recovery_configured": bool((os.getenv("SUPER_ADMIN_RECOVERY_SECRET") or "").strip()),
+        "message": (
+            "قنوات الإرسال تعتمد على إعدادات الخادم. "
+            "البريد يحتاج SMTP_* والهاتف يحتاج SMS_WEBHOOK_URL."
+        ),
+    }
+
+
 def _send_email(to_addr: str, subject: str, body: str) -> None:
     host = os.getenv("SMTP_HOST", "")
     port = int(os.getenv("SMTP_PORT", "587"))

@@ -25,12 +25,34 @@ export default function AdminLogin() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [masked, setMasked] = useState('');
   const [loading, setLoading] = useState(false);
+  const [delivery, setDelivery] = useState<{
+    email_delivery_available: boolean;
+    sms_delivery_available: boolean;
+    dev_echo_enabled: boolean;
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     if (localAuth.isLoggedIn()) {
       navigate(ROUTES.ADMIN, { replace: true });
     }
   }, [navigate]);
+
+  useEffect(() => {
+    if (mode === 'forgot' || mode === 'otp') {
+      client.auth
+        .passwordResetStatus()
+        .then((s) =>
+          setDelivery({
+            email_delivery_available: s.email_delivery_available,
+            sms_delivery_available: s.sms_delivery_available,
+            dev_echo_enabled: s.dev_echo_enabled,
+            message: s.message,
+          }),
+        )
+        .catch(() => setDelivery(null));
+    }
+  }, [mode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,6 +84,30 @@ export default function AdminLogin() {
     e.preventDefault();
     if (!username.trim()) {
       toast({ title: 'خطأ', description: 'أدخل اسم المستخدم', variant: 'destructive' });
+      return;
+    }
+    if (channel === 'email' && delivery && !delivery.email_delivery_available) {
+      toast({
+        title: 'البريد غير مهيأ',
+        description: 'SMTP غير مضبوط على الخادم. لا يمكن إرسال OTP عبر البريد حتى تُضاف SMTP_HOST وSMTP_FROM وباقي متغيرات SMTP.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (channel === 'phone' && delivery && !delivery.sms_delivery_available) {
+      toast({
+        title: 'الرسائل غير مهيأة',
+        description: 'SMS_WEBHOOK_URL غير مضبوط. لا يمكن إرسال OTP عبر الهاتف حتى يُعدّ مزود الرسائل.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (channel === 'auto' && delivery && !delivery.email_delivery_available && !delivery.sms_delivery_available) {
+      toast({
+        title: 'لا توجد قناة إرسال',
+        description: 'لا SMTP ولا SMS مهيأين على الخادم. اطلب من المدير ضبط بيئة الإرسال أولًا.',
+        variant: 'destructive',
+      });
       return;
     }
     setLoading(true);
@@ -181,6 +227,15 @@ export default function AdminLogin() {
               <p className="text-sm text-slate-600">
                 أدخل اسم المستخدم واختر قناة الاسترداد المسجّلة (بريد أو هاتف). لن نكشف إن كان الحساب موجودًا.
               </p>
+              {delivery && (
+                <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700 space-y-1">
+                  <p>البريد (SMTP): {delivery.email_delivery_available ? 'مفعّل على الخادم' : 'غير مهيأ — لن يصل OTP عبر البريد حتى تُضبط SMTP_*'}</p>
+                  <p>الهاتف (SMS): {delivery.sms_delivery_available ? 'مفعّل على الخادم' : 'غير مهيأ — لن يصل OTP عبر الهاتف حتى يُضبط SMS_WEBHOOK_URL'}</p>
+                  {delivery.dev_echo_enabled && (
+                    <p className="text-red-700 font-semibold">تحذير: PASSWORD_RESET_DEV_ECHO مفعّل — لا تستخدمه في Production.</p>
+                  )}
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>اسم المستخدم</Label>
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} disabled={loading} />
@@ -193,8 +248,12 @@ export default function AdminLogin() {
                   onChange={(e) => setChannel(e.target.value as typeof channel)}
                 >
                   <option value="auto">تلقائي</option>
-                  <option value="email">البريد الإلكتروني</option>
-                  <option value="phone">الهاتف</option>
+                  <option value="email" disabled={delivery ? !delivery.email_delivery_available : false}>
+                    البريد الإلكتروني
+                  </option>
+                  <option value="phone" disabled={delivery ? !delivery.sms_delivery_available : false}>
+                    الهاتف
+                  </option>
                 </select>
               </div>
               <Button type="submit" className="w-full" disabled={loading} style={{ background: brand.button_color || brand.secondary_color }}>
