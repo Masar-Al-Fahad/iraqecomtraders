@@ -83,6 +83,7 @@ PERMISSION_KEYS = (
     "backups.download",
     "backups.restore",
     "backups.delete",
+    "backups.manage_restore_secret",
 )
 
 LEGACY_FINANCIAL_PERMISSION_MAP = {
@@ -169,6 +170,7 @@ async def ensure_schema():
         from services.membership_numbers import SystemCounter  # noqa: F401
         from models.app_settings import AppSetting  # noqa: F401
         from models.password_reset import PasswordResetOtp  # noqa: F401
+        from models.backup_codes import PanelUserBackupCode  # noqa: F401
         from models.financial import (  # noqa: F401
             AccountingPeriod,
             CompanyContract,

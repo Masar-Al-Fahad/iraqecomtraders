@@ -70,7 +70,7 @@ const financialPermissionLabels = [
   ['financial.audit.view', 'سجل التدقيق المالي'], ['financial.certificates.issue', 'إصدار الشهادات'],
   ['backups.view', 'النسخ الاحتياطية: مشاهدة'], ['backups.create', 'النسخ الاحتياطية: إنشاء'],
   ['backups.download', 'النسخ الاحتياطية: تنزيل'], ['backups.restore', 'النسخ الاحتياطية: طلب استعادة'],
-  ['backups.delete', 'النسخ الاحتياطية: حذف'],
+  ['backups.delete', 'النسخ الاحتياطية: حذف'], ['backups.manage_restore_secret', 'النسخ الاحتياطية: رمز تأكيد الاستعادة'],
 ] as const;
 
 interface PanelUser {
@@ -159,6 +159,16 @@ export default function UsersManagement() {
   const [formRecovery, setFormRecovery] = useState('auto');
   const [formPermissions, setFormPermissions] = useState<Permissions>(emptyPermissions());
   const [formActive, setFormActive] = useState(true);
+  const [codesDialogOpen, setCodesDialogOpen] = useState(false);
+  const [codesUser, setCodesUser] = useState<PanelUser | null>(null);
+  const [plainCodes, setPlainCodes] = useState<string[]>([]);
+  const [codesStatus, setCodesStatus] = useState<{ remaining: number; used: number; has_active_codes: boolean } | null>(null);
+  const [codesBusy, setCodesBusy] = useState(false);
+  const [pwdDialogOpen, setPwdDialogOpen] = useState(false);
+  const [pwdUser, setPwdUser] = useState<PanelUser | null>(null);
+  const [adminNewPassword, setAdminNewPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
+  const [pwdBusy, setPwdBusy] = useState(false);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -259,6 +269,29 @@ export default function UsersManagement() {
     setFormPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const allPermissionKeys = permissionLabels.map((p) => p.key as string);
+  const selectedCount = allPermissionKeys.filter((k) => !!formPermissions[k]).length;
+  const allSelected = selectedCount === allPermissionKeys.length && allPermissionKeys.length > 0;
+
+  const selectAllPermissions = () => {
+    setFormPermissions((prev) => {
+      const next = { ...prev };
+      allPermissionKeys.forEach((k) => {
+        next[k] = true;
+      });
+      return next;
+    });
+  };
+
+  const clearAllPermissions = () => {
+    setFormPermissions(emptyPermissions());
+  };
+
+  const toggleSelectAllPermissions = () => {
+    if (allSelected) clearAllPermissions();
+    else selectAllPermissions();
+  };
+
   const saveUser = async () => {
     if (!formUsername.trim()) {
       toast({ title: 'خطأ', description: 'يرجى إدخال اسم المستخدم', variant: 'destructive' });
@@ -344,6 +377,85 @@ export default function UsersManagement() {
       fetchUsers();
     } catch {
       toast({ title: 'خطأ', description: 'فشل في تغيير حالة المستخدم', variant: 'destructive' });
+    }
+  };
+
+  const openBackupCodes = async (user: PanelUser) => {
+    setCodesUser(user);
+    setPlainCodes([]);
+    setCodesDialogOpen(true);
+    try {
+      const st = await client.apiCall.invoke({
+        url: `/api/v1/admin/users/${user.id}/backup-codes/status`,
+        method: 'GET',
+        data: {},
+      });
+      setCodesStatus(st.data);
+    } catch {
+      setCodesStatus(null);
+    }
+  };
+
+  const generateBackupCodes = async () => {
+    if (!codesUser) return;
+    if (!confirm(`توليد 5 رموز جديدة لـ ${codesUser.username}؟ سيتم إبطال الرموز القديمة غير المستخدمة.`)) return;
+    setCodesBusy(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: `/api/v1/admin/users/${codesUser.id}/backup-codes`,
+        method: 'POST',
+        data: {},
+      });
+      setPlainCodes(res.data.codes || []);
+      setCodesStatus({
+        remaining: (res.data.codes || []).length,
+        used: codesStatus?.used || 0,
+        has_active_codes: true,
+      });
+      toast({ title: 'تم التوليد', description: 'احفظ الرموز الآن — لن تُعرض مرة أخرى' });
+    } catch (error: any) {
+      toast({ title: 'خطأ', description: String(error?.data?.detail || error?.message || 'فشل التوليد'), variant: 'destructive' });
+    } finally {
+      setCodesBusy(false);
+    }
+  };
+
+  const copyCodes = async () => {
+    if (!plainCodes.length) return;
+    try {
+      await navigator.clipboard.writeText(plainCodes.join('\n'));
+      toast({ title: 'تم النسخ', description: 'نُسخت الرموز إلى الحافظة' });
+    } catch {
+      toast({ title: 'تعذر النسخ', description: 'انسخ الرموز يدويًا', variant: 'destructive' });
+    }
+  };
+
+  const openSetPassword = (user: PanelUser) => {
+    setPwdUser(user);
+    setAdminNewPassword('');
+    setAdminConfirmPassword('');
+    setPwdDialogOpen(true);
+  };
+
+  const saveAdminPassword = async () => {
+    if (!pwdUser) return;
+    if (adminNewPassword.length < 6 || adminNewPassword !== adminConfirmPassword) {
+      toast({ title: 'خطأ', description: 'كلمة مرور متطابقة لا تقل عن 6 أحرف', variant: 'destructive' });
+      return;
+    }
+    setPwdBusy(true);
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/admin/users/${pwdUser.id}/set-password`,
+        method: 'POST',
+        data: { new_password: adminNewPassword },
+      });
+      toast({ title: 'تم', description: `تم تحديث كلمة مرور ${pwdUser.username}` });
+      setPwdDialogOpen(false);
+    } catch (error: any) {
+      toast({ title: 'خطأ', description: String(error?.data?.detail || error?.message || 'فشل التحديث'), variant: 'destructive' });
+    } finally {
+      setPwdBusy(false);
     }
   };
 
@@ -459,6 +571,12 @@ export default function UsersManagement() {
                               <Button variant="ghost" size="sm" onClick={() => openEditDialog(user)} title="تعديل">
                                 <Pencil className="w-4 h-4" />
                               </Button>
+                              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => void openBackupCodes(user)} title="الرموز الاحتياطية">
+                                رموز
+                              </Button>
+                              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openSetPassword(user)} title="تغيير كلمة المرور">
+                                كلمة المرور
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -491,10 +609,12 @@ export default function UsersManagement() {
                         )}
                       </div>
                       <p className="text-xs text-gray-500">{activePermissionsLabel(user.permissions)}</p>
-                      <div className="flex gap-2 pt-1">
+                      <div className="flex gap-2 pt-1 flex-wrap">
                         <Button size="sm" variant="outline" onClick={() => openEditDialog(user)} className="flex items-center gap-1">
                           <Pencil className="w-3 h-3" /> تعديل
                         </Button>
+                        <Button size="sm" variant="outline" onClick={() => void openBackupCodes(user)}>رموز احتياطية</Button>
+                        <Button size="sm" variant="outline" onClick={() => openSetPassword(user)}>كلمة المرور</Button>
                         <Button size="sm" variant="outline" onClick={() => toggleActive(user)}>
                           {user.is_active ? 'تعطيل' : 'تفعيل'}
                         </Button>
@@ -542,29 +662,36 @@ export default function UsersManagement() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label className="text-sm font-medium">البريد للاسترداد</Label>
+                <Label className="text-sm font-medium">البريد (اختياري)</Label>
                 <Input dir="ltr" value={formEmail} onChange={(e) => setFormEmail(e.target.value)} placeholder="user@example.com" />
               </div>
               <div className="space-y-2">
-                <Label className="text-sm font-medium">الهاتف للاسترداد</Label>
+                <Label className="text-sm font-medium">الهاتف (اختياري)</Label>
                 <Input dir="ltr" value={formPhone} onChange={(e) => setFormPhone(e.target.value)} placeholder="07xxxxxxxxx" />
               </div>
             </div>
             <div className="space-y-2">
-              <Label className="text-sm font-medium">قناة الاسترداد المفضلة</Label>
-              <select className="h-10 w-full border rounded-md px-3" value={formRecovery} onChange={(e) => setFormRecovery(e.target.value)}>
-                <option value="auto">تلقائي</option>
-                <option value="email">بريد</option>
-                <option value="phone">هاتف</option>
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">الصلاحيات</Label>
-              <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="text-sm font-medium">الصلاحيات</Label>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={selectAllPermissions}>
+                    تحديد الكل
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={clearAllPermissions}>
+                    إلغاء تحديد الكل
+                  </Button>
+                </div>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer bg-slate-100 border rounded-md px-3 py-2 text-sm font-medium">
+                <Checkbox checked={allSelected} onCheckedChange={toggleSelectAllPermissions} />
+                تحديد الكل / إلغاء تحديد الكل
+                <span className="text-xs text-slate-500 mr-auto">({selectedCount}/{allPermissionKeys.length})</span>
+              </label>
+              <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-lg max-h-72 overflow-y-auto">
                 {permissionLabels.map(({ key, label }) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer">
                     <Checkbox
-                      checked={formPermissions[key]}
+                      checked={!!formPermissions[key]}
                       onCheckedChange={() => togglePermission(key)}
                     />
                     <span className="text-sm">{label}</span>
@@ -578,6 +705,59 @@ export default function UsersManagement() {
             </div>
             <Button onClick={saveUser} disabled={saving} className="w-full bg-primary text-white">
               {saving ? 'جاري الحفظ...' : editingUser ? 'حفظ التعديلات' : 'إنشاء المستخدم'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={codesDialogOpen} onOpenChange={setCodesDialogOpen}>
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>الرموز الاحتياطية — {codesUser?.username}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-slate-600">
+              تُولَّد 5 رموز لمرة واحدة. تُخزَّن كـ hash فقط. استخدام أي رمز يبطله. توليد مجموعة جديدة يبطل القديمة غير المستخدمة.
+            </p>
+            {codesStatus && (
+              <p className="text-xs text-slate-500">
+                المتبقي: {codesStatus.remaining} · المستخدم: {codesStatus.used}
+              </p>
+            )}
+            {!!plainCodes.length && (
+              <div className="rounded-md border bg-amber-50 p-3 space-y-2">
+                <p className="font-bold text-amber-900">احفظ الآن — لن تُعرض مرة أخرى:</p>
+                <ul className="font-mono text-sm space-y-1" dir="ltr">
+                  {plainCodes.map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+                <Button type="button" size="sm" variant="outline" onClick={() => void copyCodes()}>نسخ الكل</Button>
+              </div>
+            )}
+            <Button type="button" disabled={codesBusy} onClick={() => void generateBackupCodes()} className="w-full">
+              {codesBusy ? 'جاري التوليد...' : 'توليد / إعادة توليد 5 رموز'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pwdDialogOpen} onOpenChange={setPwdDialogOpen}>
+        <DialogContent className="max-w-sm" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تغيير كلمة مرور — {pwdUser?.username}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>كلمة المرور الجديدة</Label>
+              <Input type="password" value={adminNewPassword} onChange={(e) => setAdminNewPassword(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>تأكيد</Label>
+              <Input type="password" value={adminConfirmPassword} onChange={(e) => setAdminConfirmPassword(e.target.value)} />
+            </div>
+            <Button type="button" disabled={pwdBusy} onClick={() => void saveAdminPassword()} className="w-full">
+              {pwdBusy ? 'جاري الحفظ...' : 'حفظ كلمة المرور'}
             </Button>
           </div>
         </DialogContent>

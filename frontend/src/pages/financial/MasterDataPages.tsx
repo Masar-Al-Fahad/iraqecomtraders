@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, Download, Edit3, ExternalLink, Eye, FileText, History, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronDown, Download, Edit3, ExternalLink, Eye, FileText, History, MessageCircle, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,7 +9,26 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { financialErpApi } from '@/lib/financialErpApi';
 import type { AccountItem, Attachment, Company, MemberAccount, MemberOption, PricingItem, ServiceType } from '@/types/financialErp';
-import { CompactTable, Empty, FileButton, FormDialog, PageTitle, SafeDateInput, SearchBox, StatusBadge, money } from './FinancialUi';
+import { ActionButton, CompactTable, Empty, FileButton, FormDialog, PageTitle, SafeDateInput, SearchBox, StatusBadge, money } from './FinancialUi';
+
+function toWhatsAppIntl(phone: string): string | null {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 8) return null;
+  if (digits.startsWith('964')) return digits;
+  if (digits.startsWith('0')) return `964${digits.slice(1)}`;
+  return `964${digits}`;
+}
+
+function openCompanyWhatsApp(phone: string) {
+  const intl = toWhatsAppIntl(phone);
+  if (!intl) return;
+  window.open(`https://wa.me/${intl}`, '_blank', 'noopener,noreferrer');
+}
+
+type SortDir = 'asc' | 'desc';
+function cmpStr(a: string, b: string, dir: SortDir) {
+  return a.localeCompare(b, 'ar') * (dir === 'asc' ? 1 : -1);
+}
 
 type Common={companies:Company[];services:ServiceType[];reloadCompanies:()=>Promise<void>;can:(key:string)=>boolean;notify:(e:unknown)=>void;success:(message:string)=>void};
 
@@ -81,13 +100,31 @@ export function CompaniesPage({companies,services,reloadCompanies,can,notify,suc
   const [historyOpen,setHistoryOpen]=useState(false);
   const [savingPrice,setSavingPrice]=useState(false);
   const [savingContract,setSavingContract]=useState<number|null>(null);
+  const [sortKey,setSortKey]=useState<'name'|'owner'|'mobile'|'service'|'status'|'started'>('name');
+  const [sortDir,setSortDir]=useState<SortDir>('asc');
 
   useEffect(()=>{setLocalServices(services)},[services]);
   useEffect(()=>{(async()=>{try{setLocalServices((await financialErpApi.serviceTypes(true)).items)}catch(e){notify(e)}})()},[]);
 
-  const filtered=useMemo(()=>companies.filter(x=>(status==='all'||x.cooperation_status===status)&&
-    [x.name,x.service_type_name,x.owner_name,x.mobile].some(v=>String(v||'').toLowerCase().includes(search.toLowerCase()))),
-  [companies,search,status]);
+  const filtered=useMemo(()=>{
+    const q=search.toLowerCase().trim();
+    let list=companies.filter(x=>(status==='all'||x.cooperation_status===status)&&
+      (!q||[x.name,x.service_type_name,x.owner_name,x.mobile,x.address].some(v=>String(v||'').toLowerCase().includes(q))));
+    list=[...list].sort((a,b)=>{
+      if(sortKey==='owner')return cmpStr(a.owner_name||'',b.owner_name||'',sortDir);
+      if(sortKey==='mobile')return cmpStr(a.mobile||'',b.mobile||'',sortDir);
+      if(sortKey==='service')return cmpStr(a.service_type_name||'',b.service_type_name||'',sortDir);
+      if(sortKey==='status')return cmpStr(a.cooperation_status||'',b.cooperation_status||'',sortDir);
+      if(sortKey==='started')return cmpStr(a.cooperation_started_at||'',b.cooperation_started_at||'',sortDir);
+      return cmpStr(a.name||'',b.name||'',sortDir);
+    });
+    return list;
+  },[companies,search,status,sortKey,sortDir]);
+
+  const toggleSort=(key:typeof sortKey)=>{
+    if(sortKey===key)setSortDir(d=>d==='asc'?'desc':'asc');
+    else{setSortKey(key);setSortDir('asc')}
+  };
 
   const validateCompany=()=>{
     const next:Record<string,string>={};
@@ -264,30 +301,51 @@ export function CompaniesPage({companies,services,reloadCompanies,can,notify,suc
       actions={canCreate&&<Button type="button" onClick={openCreate}><Plus className="w-4 h-4 ml-2"/>شركة جديدة</Button>}
     />
 
-    <Card><CardContent className="p-3 flex gap-2 flex-wrap">
-      <SearchBox value={search} onChange={setSearch} placeholder="اسم الشركة، المالك، الهاتف..."/>
+    <Card><CardContent className="p-3 flex gap-2 flex-wrap items-center">
+      <SearchBox value={search} onChange={setSearch} placeholder="اسم الشركة، المالك، الهاتف، العنوان..."/>
       <select className="h-10 border rounded-md px-3 bg-white" value={status} onChange={e=>setStatus(e.target.value)}>
         <option value="all">كل حالات التعاون</option>
         <option value="active">فعال</option>
         <option value="suspended">موقوف</option>
         <option value="ended">منتهي</option>
       </select>
+      <select className="h-10 border rounded-md px-3 bg-white" value={sortKey} onChange={e=>setSortKey(e.target.value as typeof sortKey)} title="ترتيب حسب">
+        <option value="name">ترتيب: الاسم</option>
+        <option value="owner">ترتيب: صاحب الشركة</option>
+        <option value="mobile">ترتيب: الموبايل</option>
+        <option value="service">ترتيب: النشاط</option>
+        <option value="status">ترتيب: حالة التعاون</option>
+        <option value="started">ترتيب: بدء التعاون</option>
+      </select>
+      <Button type="button" size="sm" variant="outline" onClick={()=>toggleSort(sortKey)}>{sortDir==='asc'?'تصاعدي ▲':'تنازلي ▼'}</Button>
       <span className="text-sm text-slate-500 self-center">{filtered.length} شركة</span>
     </CardContent></Card>
 
     {!filtered.length&&<Empty title="لا توجد شركات" description="أضف شركة جديدة من الزر أعلاه."/>}
 
     <Accordion type="single" collapsible value={expanded} onValueChange={value=>void onAccordionChange(value)} className="space-y-3">
-      {filtered.map(company=>{
+      {filtered.map((company, idx)=>{
         const detail=details[company.id];
+        const waOk=!!toWhatsAppIntl(company.mobile||'');
         return <AccordionItem key={company.id} value={String(company.id)} className="border rounded-xl bg-white px-4">
           <AccordionTrigger className="hover:no-underline py-4">
             <div className="flex flex-1 flex-col md:flex-row md:items-center md:justify-between gap-2 text-right">
-              <div>
-                <b className="text-base">{company.name}</b>
-                <small className="block text-slate-500">{company.service_type_name} · {company.owner_name||'بدون مالك'} · {company.mobile||'-'}</small>
+              <div className="flex gap-3 items-start">
+                <span className="font-mono text-xs text-slate-400 mt-1 w-6">{idx+1}</span>
+                <div>
+                  <b className="text-base">{company.name}</b>
+                  <small className="block text-slate-500">{company.service_type_name} · {company.owner_name||'بدون مالك'} · <span dir="ltr">{company.mobile||'-'}</span></small>
+                </div>
               </div>
-              <div className="flex items-center gap-2 justify-end">
+              <div className="flex items-center gap-2 justify-end flex-wrap" onClick={e=>e.stopPropagation()}>
+                {waOk&&(
+                  <ActionButton
+                    label="واتساب"
+                    icon={MessageCircle}
+                    className="text-green-700 border-green-200"
+                    onClick={()=>openCompanyWhatsApp(company.mobile||'')}
+                  />
+                )}
                 <StatusBadge value={company.cooperation_status}/>
                 <StatusBadge value={company.status}/>
                 <span className="text-xs text-slate-500 inline-flex items-center"><ChevronDown className="w-4 h-4 ml-1"/>تفاصيل الشركة</span>
@@ -302,7 +360,15 @@ export function CompaniesPage({companies,services,reloadCompanies,can,notify,suc
                 <CardContent className="grid md:grid-cols-3 gap-3 text-sm">
                   <div><small className="text-slate-500 block">نوع الخدمة</small><b>{company.service_type_name}</b></div>
                   <div><small className="text-slate-500 block">صاحب الشركة</small><b>{company.owner_name||'-'}</b></div>
-                  <div><small className="text-slate-500 block">الهاتف</small><b>{company.mobile||'-'}</b></div>
+                  <div>
+                    <small className="text-slate-500 block">الهاتف</small>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <b dir="ltr">{company.mobile||'-'}</b>
+                      {toWhatsAppIntl(company.mobile||'')&&(
+                        <ActionButton label="واتساب" icon={MessageCircle} className="text-green-700 border-green-200" onClick={()=>openCompanyWhatsApp(company.mobile||'')}/>
+                      )}
+                    </div>
+                  </div>
                   <div className="md:col-span-2"><small className="text-slate-500 block">العنوان</small><b>{company.address||'-'}</b></div>
                   <div><small className="text-slate-500 block">تاريخ التعاون</small><b>{company.cooperation_started_at||'-'}</b></div>
                   <div className="md:col-span-3"><small className="text-slate-500 block">معلومات الاتصال</small><b>{company.contact_info||'-'}</b></div>
@@ -477,6 +543,9 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
   const [accounts,setAccounts]=useState<MemberAccount[]>([]);const [members,setMembers]=useState<MemberOption[]>([]);
   const [summaries,setSummaries]=useState<Record<number,AccountItem[]>>({});
   const [search,setSearch]=useState('');const [companyFilter,setCompanyFilter]=useState('');const [archiveFilter,setArchiveFilter]=useState<'active'|'archived'|'all'>('active');const [selected,setSelected]=useState<MemberAccount>();
+  const [govFilter,setGovFilter]=useState('');const [statusFilter,setStatusFilter]=useState('all');
+  const [sortKey,setSortKey]=useState<'member'|'company'|'gov'|'started'|'status'>('member');
+  const [sortDir,setSortDir]=useState<SortDir>('asc');
   const [open,setOpen]=useState(false);const [form,setForm]=useState<any>(blankAccount);const [pricing,setPricing]=useState<PricingItem[]>([]);
   const [items,setItems]=useState<AccountItem[]>([]);const [annexes,setAnnexes]=useState<Attachment[]>([]);const [annexDate,setAnnexDate]=useState(date());
   const [customOverrides,setCustomOverrides]=useState<Record<number,boolean>>({});const [saving,setSaving]=useState(false);const [loadingPricing,setLoadingPricing]=useState(false);
@@ -485,6 +554,28 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
     const pairs=await Promise.all(x.items.filter(a=>!a.archived).map(async a=>[a.id,(await financialErpApi.accountItems(a.id)).items] as const));setSummaries(Object.fromEntries(pairs));
   }catch(e){notify(e)}};
   useEffect(()=>{load()},[companyFilter,archiveFilter]);useEffect(()=>{if(can('financial.member_links.create'))financialErpApi.members().then(x=>setMembers(x.items)).catch(notify)},[]);
+
+  const displayRows=useMemo(()=>{
+    const q=search.toLowerCase().trim();
+    let list=accounts.filter(a=>{
+      if(govFilter&&a.governorate!==govFilter)return false;
+      if(statusFilter!=='all'&&(a.archived?'cancelled':a.status)!==statusFilter)return false;
+      if(!q)return true;
+      return [a.member_name,a.business_name,a.membership_number,a.company_name,a.registered_name,a.registered_phone,a.customer_code,a.governorate]
+        .some(v=>String(v||'').toLowerCase().includes(q));
+    });
+    list=[...list].sort((a,b)=>{
+      if(sortKey==='company')return cmpStr(a.company_name||'',b.company_name||'',sortDir);
+      if(sortKey==='gov')return cmpStr(a.governorate||'',b.governorate||'',sortDir);
+      if(sortKey==='started')return cmpStr(a.started_at||'',b.started_at||'',sortDir);
+      if(sortKey==='status')return cmpStr(a.archived?'cancelled':a.status,b.archived?'cancelled':b.status,sortDir);
+      return cmpStr(a.member_name||'',b.member_name||'',sortDir);
+    });
+    return list;
+  },[accounts,search,govFilter,statusFilter,sortKey,sortDir]);
+
+  const governorates=useMemo(()=>[...new Set(accounts.map(a=>a.governorate).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')),[accounts]);
+
   const openAccount=async(account?:MemberAccount)=>{setSelected(account);setForm(account?{...blankAccount,...account,member_id:String(account.member_id),company_id:String(account.company_id)}:blankAccount);setOpen(true);
     if(account){const [p,i,a]=await Promise.all([financialErpApi.pricingItems(account.company_id),financialErpApi.accountItems(account.id),financialErpApi.annexes(account.id)]);setPricing(p.items);setItems(i.items);setCustomOverrides(Object.fromEntries(i.items.map(item=>[item.pricing_item_id,item.unit_price_override!=null||item.mfec_share_type_override!=null||item.mfec_share_value_override!=null])));setAnnexes(a.items)}else{setPricing([]);setItems([]);setCustomOverrides({});setAnnexes([])}};
   const chooseCompany=async(companyId:string)=>{setForm({...form,company_id:companyId});setPricing([]);setItems([]);setCustomOverrides({});if(!companyId)return;setLoadingPricing(true);try{const response=await financialErpApi.pricingItems(Number(companyId));setPricing(response.items)}catch(e){notify(e)}finally{setLoadingPricing(false)}};
@@ -505,16 +596,54 @@ export function MemberLinksPage({companies,can,notify,success,finance}:Omit<Comm
   return <div className="space-y-4">
     <PageTitle title="ارتباطات الأعضاء" description="حسابات الأعضاء لدى الشركات، الفقرات الفعالة، الاستثناءات والملحق الثلاثي. الأرشفة Soft Delete ولا تمسح التاريخ المالي." actions={can('financial.member_links.create')&&archiveFilter!=='archived'&&<Button onClick={()=>openAccount()}><Plus className="w-4 h-4 ml-2"/>ارتباط جديد</Button>}/>
     <Card><CardContent className="p-3 flex gap-2 flex-wrap items-center">
-      <SearchBox value={search} onChange={setSearch} placeholder="العضو، رقم العضوية، كود العميل..."/>
+      <SearchBox value={search} onChange={setSearch} placeholder="العضو، رقم العضوية، كود العميل، الهاتف..."/>
       <Button variant="outline" onClick={load}>بحث</Button>
       <select className="h-10 border rounded-md px-3" value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)}><option value="">كل الشركات</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
-      <div className="flex gap-1 border rounded-md p-1 bg-slate-50">
-        {([['active','فعال'],['archived','مؤرشف'],['all','الكل']] as const).map(([value,label])=>
-          <Button key={value} type="button" size="sm" variant={archiveFilter===value?'default':'ghost'} onClick={()=>setArchiveFilter(value)}>{label}</Button>
-        )}
+      <select className="h-10 border rounded-md px-3" value={govFilter} onChange={e=>setGovFilter(e.target.value)}><option value="">كل المحافظات</option>{governorates.map(g=><option key={g} value={g}>{g}</option>)}</select>
+      <select className="h-10 border rounded-md px-3" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+        <option value="all">كل الحالات</option>
+        <option value="active">فعال</option>
+        <option value="inactive">غير فعال</option>
+        <option value="suspended">معلق</option>
+        <option value="cancelled">مؤرشف</option>
+      </select>
+      <select className="h-10 border rounded-md px-3" value={sortKey} onChange={e=>setSortKey(e.target.value as typeof sortKey)}>
+        <option value="member">ترتيب: العضو</option>
+        <option value="company">ترتيب: الشركة</option>
+        <option value="gov">ترتيب: المحافظة</option>
+        <option value="started">ترتيب: بدء الارتباط</option>
+        <option value="status">ترتيب: الحالة</option>
+      </select>
+      <Button type="button" size="sm" variant="outline" onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')}>{sortDir==='asc'?'تصاعدي ▲':'تنازلي ▼'}</Button>
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-bold text-slate-600">عرض الارتباطات</span>
+        <div className="flex gap-1 border rounded-md p-1 bg-amber-50 border-amber-200">
+          {([['active','فعال فقط'],['archived','إظهار المؤرشف'],['all','الكل']] as const).map(([value,label])=>
+            <Button key={value} type="button" size="sm" variant={archiveFilter===value?'default':'ghost'} onClick={()=>setArchiveFilter(value)}>{label}</Button>
+          )}
+        </div>
       </div>
+      <span className="text-sm text-slate-500">{displayRows.length} سجل</span>
     </CardContent></Card>
-    <CompactTable headers={['العضو / النشاط','المحافظة','الشركة / الخدمة','الفقرات الفعالة','بيانات التسجيل','بدء الارتباط','الأرشفة','الحالة','الرابط','']}>{accounts.map(a=><tr key={a.id} className={`border-t ${a.archived?'opacity-70 bg-amber-50/40':''}`}><td className="p-3"><b>{a.member_name}</b><small className="block">{a.business_name} · {a.membership_number}</small></td><td>{a.governorate}</td><td>{a.company_name}<small className="block">{a.service_type_name}</small></td><td>{a.archived?'—':(summaries[a.id]?.map(x=><div key={x.id}>{x.name} ({x.unit}){finance&&<small> · {money(x.effective_unit_price)} / {x.effective_mfec_share_type==='percentage'?`${x.effective_mfec_share_value}%`:money(x.effective_mfec_share_value)}</small>}</div>)||'-')}</td><td>{a.registered_name||'-'}<small className="block">{a.registered_phone} · {a.customer_code}</small></td><td>{a.started_at||'-'}</td><td>{a.archived?<>{a.deleted_at?new Date(a.deleted_at).toLocaleString('ar-IQ'):'-'}<small className="block">بواسطة: {a.deleted_by||'-'}</small></>:'—'}</td><td><StatusBadge value={a.archived?'cancelled':a.status}/></td><td>{a.customer_portal_url&&<Button size="sm" variant="outline" onClick={()=>window.open(a.customer_portal_url,'_blank','noopener,noreferrer')}><ExternalLink className="w-4 h-4"/></Button>}</td><td className="flex gap-1"><Button size="sm" variant="ghost" onClick={()=>openAccount(a)}><Edit3 className="w-4 h-4"/></Button>{a.archived&&can('financial.member_links.edit')&&<Button size="sm" variant="outline" onClick={async()=>{try{const x=await financialErpApi.restoreMemberAccount(a.id);await load();success(x.message||'تمت الاستعادة')}catch(e){notify(e)}}}><RotateCcw className="w-4 h-4 ml-1"/>استعادة</Button>}</td></tr>)}</CompactTable>
+    <CompactTable headers={['تسلسل','العضو / النشاط','المحافظة','الشركة / الخدمة','الفقرات الفعالة','بيانات التسجيل','بدء الارتباط','الأرشفة','الحالة','الرابط','']}>{displayRows.map((a,idx)=><tr key={a.id} className={`border-t ${a.archived?'opacity-70 bg-amber-50/40':''}`}>
+      <td className="p-3 font-mono text-xs text-slate-500">{idx+1}</td>
+      <td className="p-3"><b>{a.member_name}</b><small className="block">{a.business_name} · {a.membership_number}</small></td>
+      <td>{a.governorate}</td>
+      <td>{a.company_name}<small className="block">{a.service_type_name}</small></td>
+      <td>{a.archived?'—':(summaries[a.id]?.map(x=><div key={x.id}>{x.name} ({x.unit}){finance&&<small> · {money(x.effective_unit_price)} / {x.effective_mfec_share_type==='percentage'?`${x.effective_mfec_share_value}%`:money(x.effective_mfec_share_value)}</small>}</div>)||'-')}</td>
+      <td>
+        {a.registered_name||'-'}
+        <small className="block" dir="ltr">{a.registered_phone} · {a.customer_code}</small>
+        {toWhatsAppIntl(a.registered_phone||'')&&(
+          <ActionButton label="واتساب" icon={MessageCircle} className="mt-1 text-green-700 border-green-200" onClick={()=>openCompanyWhatsApp(a.registered_phone||'')}/>
+        )}
+      </td>
+      <td>{a.started_at||'-'}</td>
+      <td>{a.archived?<>{a.deleted_at?new Date(a.deleted_at).toLocaleString('en-GB'):'-'}<small className="block">بواسطة: {a.deleted_by||'-'}</small></>:'—'}</td>
+      <td><StatusBadge value={a.archived?'cancelled':a.status}/></td>
+      <td>{a.customer_portal_url&&<Button size="sm" variant="outline" onClick={()=>window.open(a.customer_portal_url,'_blank','noopener,noreferrer')}><ExternalLink className="w-4 h-4"/></Button>}</td>
+      <td className="flex gap-1"><Button size="sm" variant="ghost" onClick={()=>openAccount(a)}><Edit3 className="w-4 h-4"/></Button>{a.archived&&can('financial.member_links.edit')&&<Button size="sm" variant="outline" onClick={async()=>{try{const x=await financialErpApi.restoreMemberAccount(a.id);await load();success(x.message||'تمت الاستعادة')}catch(e){notify(e)}}}><RotateCcw className="w-4 h-4 ml-1"/>استعادة</Button>}</td>
+    </tr>)}</CompactTable>
     <FormDialog open={open} onOpenChange={setOpen} title={selected?`حساب ${selected.member_name} لدى ${selected.company_name}`:'ارتباط عضو بشركة'} className="max-w-5xl">
       <div className="grid md:grid-cols-3 gap-3"><Field label="العضو"><select disabled={!!selected} className="w-full h-10 border rounded-md px-3" value={form.member_id} onChange={e=>setForm({...form,member_id:e.target.value})}><option value="">اختر</option>{members.map(m=><option key={m.id} value={m.id}>{m.membership_number} · {m.member_name} · {m.business_name}</option>)}</select></Field>
         <Field label="الشركة"><select disabled={!!selected} className="w-full h-10 border rounded-md px-3" value={form.company_id} onChange={e=>void chooseCompany(e.target.value)}><option value="">اختر</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>

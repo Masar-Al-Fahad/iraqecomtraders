@@ -42,7 +42,7 @@ const current = new Date();
 const api = (url: string, method = 'GET', data?: unknown) =>
   client.apiCall.invoke({ url, method, data });
 const money = (value: number | string | undefined) =>
-  `${Number(value || 0).toLocaleString('ar-IQ')} د.ع`;
+  `${Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 3 })} د.ع`;
 
 export default function FinancialActivities() {
   const { toast } = useToast();
@@ -338,7 +338,7 @@ export default function FinancialActivities() {
                 ['إيرادات الشهر', money(dashboard?.total_revenue)],
                 ['المصاريف', money(dashboard?.total_expenses)],
                 ['صافي الربح', money(dashboard?.net_profit)],
-                ['إجمالي العمليات', Number(dashboard?.total_operations || 0).toLocaleString('ar-IQ')],
+                ['إجمالي العمليات', Number(dashboard?.total_operations || 0).toLocaleString('en-US')],
               ].map(([label, value]) => <Card key={label}><CardContent className="p-4"><p className="text-xs text-gray-500">{label}</p><p className="text-xl font-bold mt-1">{value}</p></CardContent></Card>)}
             </div>
             <div className="grid md:grid-cols-2 gap-4">

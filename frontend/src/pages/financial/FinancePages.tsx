@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDownAZ, ArrowUpAZ, Edit3, Eye, FileDown, FileSpreadsheet, Plus, Printer, ReceiptText, RotateCcw, Save, Wallet } from 'lucide-react';
+import { Edit3, Eye, FileDown, FileSpreadsheet, Plus, Printer, ReceiptText, RotateCcw, Save, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -10,8 +10,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { financialErpApi } from '@/lib/financialErpApi';
 import { useBrand } from '@/lib/brand';
 import type { Company, Expense, Revenue, ServiceType } from '@/types/financialErp';
-import { CompactTable, Empty, FileButton, FormDialog, PageTitle, SafeDateInput, StatusBadge, money } from './FinancialUi';
-import { downloadVoucherPdf, openVoucherWindow, paymentVoucherHtml, receiptVoucherHtml } from './voucherDocs';
+import { CompactTable, Empty, FileButton, FormDialog, PageTitle, SafeDateInput, StatusBadge, ActionButton, formatLatn, money } from './FinancialUi';
+import { downloadVoucherPdf, downloadVoucherPdfZip, openVoucherWindow, paymentVoucherHtml, receiptVoucherHtml } from './voucherDocs';
 
 type Props = {
   companies: Company[];
@@ -37,15 +37,26 @@ function Metric({ label, value, moneyValue = true }: { label: string; value: num
     <Card>
       <CardContent className="p-4">
         <small className="text-slate-500">{label}</small>
-        <b className="block text-xl">{moneyValue ? money(value) : Number(value || 0).toLocaleString('ar-IQ')}</b>
+        <b className="block text-xl">{moneyValue ? money(value) : formatLatn(value, { maximumFractionDigits: 0 })}</b>
       </CardContent>
     </Card>
   );
 }
-function SortBtn({ active, dir, onClick }: { active: boolean; dir: SortDir; onClick: () => void }) {
+function ColSort({
+  label,
+  active,
+  dir,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDir;
+  onClick: () => void;
+}) {
   return (
-    <button type="button" className={`inline-flex align-middle mr-1 ${active ? 'text-blue-700' : 'text-slate-400'}`} onClick={onClick} title="ترتيب">
-      {active && dir === 'asc' ? <ArrowUpAZ className="w-3.5 h-3.5" /> : <ArrowDownAZ className="w-3.5 h-3.5" />}
+    <button type="button" className="inline-flex items-center gap-1 font-semibold hover:text-blue-800" onClick={onClick}>
+      {label}
+      <span className={`text-xs ${active ? 'text-blue-700' : 'text-slate-300'}`}>{active ? (dir === 'asc' ? '↑' : '↓') : '↕'}</span>
     </button>
   );
 }
@@ -159,13 +170,18 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
   const [q, setQ] = useState('');
   const [method, setMethod] = useState('');
   const [category, setCategory] = useState('');
+  const [descriptionF, setDescriptionF] = useState('');
   const [yearF, setYearF] = useState('');
   const [monthF, setMonthF] = useState('');
   const [minAmt, setMinAmt] = useState('');
   const [maxAmt, setMaxAmt] = useState('');
-  const [sortKey, setSortKey] = useState<'received_at' | 'amount' | 'receipt_number' | 'company'>('received_at');
+  const [statusF, setStatusF] = useState<'all' | 'active' | 'cancelled'>('all');
+  const [sortKey, setSortKey] = useState<
+    'seq' | 'received_at' | 'amount' | 'receipt_number' | 'company' | 'category' | 'description' | 'method' | 'status'
+  >('received_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selected, setSelected] = useState<number[]>([]);
+  const [zipBusy, setZipBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Revenue>();
   const [form, setForm] = useState<any>(blankRevenue);
@@ -201,8 +217,12 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     let list = rows.filter((r) => {
+      const cancelled = r.deleted || r.status === 'cancelled';
+      if (statusF === 'active' && cancelled) return false;
+      if (statusF === 'cancelled' && !cancelled) return false;
       if (method && !(r.receipt_method || '').includes(method)) return false;
       if (category && !(r.category || '').includes(category)) return false;
+      if (descriptionF && !(r.description || '').includes(descriptionF)) return false;
       if (yearF) {
         const y = Number(String(r.received_at).slice(0, 4));
         if (y !== Number(yearF)) return false;
@@ -232,12 +252,20 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
     const dir = sortDir === 'asc' ? 1 : -1;
     list = [...list].sort((a, b) => {
       if (sortKey === 'amount') return (a.amount - b.amount) * dir;
-      if (sortKey === 'receipt_number') return String(a.receipt_number).localeCompare(String(b.receipt_number), 'ar') * dir;
+      if (sortKey === 'receipt_number') return String(a.receipt_number).localeCompare(String(b.receipt_number), 'en') * dir;
       if (sortKey === 'company') return companyName(a.company_id).localeCompare(companyName(b.company_id), 'ar') * dir;
+      if (sortKey === 'category') return String(a.category || '').localeCompare(String(b.category || ''), 'ar') * dir;
+      if (sortKey === 'description') return String(a.description || '').localeCompare(String(b.description || ''), 'ar') * dir;
+      if (sortKey === 'method') return String(a.receipt_method || '').localeCompare(String(b.receipt_method || ''), 'ar') * dir;
+      if (sortKey === 'status') {
+        const as = a.deleted || a.status === 'cancelled' ? 1 : 0;
+        const bs = b.deleted || b.status === 'cancelled' ? 1 : 0;
+        return (as - bs) * dir;
+      }
       return String(a.received_at).localeCompare(String(b.received_at)) * dir;
     });
     return list;
-  }, [rows, q, method, category, yearF, monthF, minAmt, maxAmt, sortKey, sortDir, companies]);
+  }, [rows, q, method, category, descriptionF, yearF, monthF, minAmt, maxAmt, statusF, sortKey, sortDir, companies]);
 
   const toggleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -245,6 +273,29 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
       setSortKey(key);
       setSortDir('asc');
     }
+  };
+
+  const resetFilters = () => {
+    setQ('');
+    setCompany('');
+    setFrom('');
+    setTo('');
+    setMethod('');
+    setCategory('');
+    setDescriptionF('');
+    setYearF('');
+    setMonthF('');
+    setMinAmt('');
+    setMaxAmt('');
+    setStatusF('all');
+    setDeleted(false);
+    setSelected([]);
+  };
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((x) => selected.includes(x.id));
+  const toggleSelectAll = (on: boolean) => {
+    if (on) setSelected(filtered.map((x) => x.id));
+    else setSelected([]);
   };
 
   const logo = () => resolveAssetUrl(brand.report_logo || brand.system_logo);
@@ -271,7 +322,7 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
   const viewVoucher = (row: Revenue) => setViewRow(row);
   const printVoucher = (row: Revenue) => {
     try {
-      openVoucherWindow(receiptHtml(row, 'print'), true);
+      openVoucherWindow(receiptHtml(row, 'print'));
     } catch (e) {
       notify(e);
     }
@@ -282,6 +333,33 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
       success(`تم تنزيل PDF للوصل ${row.receipt_number}`);
     } catch (e) {
       notify(e);
+    }
+  };
+
+  const exportZip = async () => {
+    if (!selected.length) {
+      notify(new Error('حدّد وصولًا واحدًا على الأقل قبل تصدير ZIP'));
+      return;
+    }
+    const picks = filtered.filter((x) => selected.includes(x.id));
+    if (!picks.length) {
+      notify(new Error('الوصولات المحددة غير ظاهرة ضمن النتائج الحالية'));
+      return;
+    }
+    setZipBusy(true);
+    try {
+      await downloadVoucherPdfZip(
+        picks.map((row) => ({
+          html: receiptHtml(row, 'pdf'),
+          filename: `${row.receipt_number || `REC-${row.id}`}.pdf`,
+        })),
+        `REC-vouchers-${today()}.zip`,
+      );
+      success(`تم تنزيل ZIP يحتوي ${picks.length} ملف PDF`);
+    } catch (e) {
+      notify(e);
+    } finally {
+      setZipBusy(false);
     }
   };
 
@@ -455,6 +533,10 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
                 وصل قبض
               </Button>
             )}
+            <Button type="button" variant="outline" disabled={zipBusy} onClick={() => void exportZip()}>
+              <FileDown className="w-4 h-4 ml-1" />
+              {zipBusy ? 'جاري ZIP…' : 'تصدير الوصولات PDF'}
+            </Button>
             {can('financial.reports.xlsx') && (
               <Button
                 variant="outline"
@@ -504,19 +586,28 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
           </select>
           <Input placeholder="طريقة القبض" value={method} onChange={(e) => setMethod(e.target.value)} />
           <Input placeholder="التصنيف" value={category} onChange={(e) => setCategory(e.target.value)} />
+          <Input placeholder="البيان / الوصف" value={descriptionF} onChange={(e) => setDescriptionF(e.target.value)} />
           <Input type="number" placeholder="السنة" value={yearF} onChange={(e) => setYearF(e.target.value)} />
           <Input type="number" min={1} max={12} placeholder="الشهر" value={monthF} onChange={(e) => setMonthF(e.target.value)} />
           <SafeDateInput className="w-full" value={from} onChange={(e) => setFrom(e.target.value)} />
           <SafeDateInput className="w-full" value={to} onChange={(e) => setTo(e.target.value)} />
           <Input type="number" placeholder="من مبلغ" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} />
           <Input type="number" placeholder="إلى مبلغ" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} />
+          <select className="h-10 border rounded-md px-3" value={statusF} onChange={(e) => setStatusF(e.target.value as typeof statusF)}>
+            <option value="all">كل الحالات</option>
+            <option value="active">فعال</option>
+            <option value="cancelled">ملغى</option>
+          </select>
           <Button type="button" variant="outline" onClick={load}>
             تطبيق من الخادم
+          </Button>
+          <Button type="button" variant="ghost" onClick={resetFilters}>
+            مسح الفلاتر
           </Button>
           {can('financial.revenues.restore') && (
             <label className="flex gap-2 items-center text-sm">
               <input type="checkbox" checked={deleted} onChange={(e) => setDeleted(e.target.checked)} />
-              إظهار الملغى
+              تحميل الملغى من الخادم
             </label>
           )}
         </CardContent>
@@ -526,38 +617,25 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
         <Metric label="المخصص" value={filtered.reduce((a, x) => a + x.allocated, 0)} />
         <Metric label="غير المخصص" value={filtered.filter((x) => !x.deleted).reduce((a, x) => a + x.remaining, 0)} />
       </div>
+      <p className="text-sm text-slate-500">النتائج: {formatLatn(filtered.length, { maximumFractionDigits: 0 })} · محدد: {formatLatn(selected.length, { maximumFractionDigits: 0 })}</p>
       <CompactTable
         headers={[
-          'تسلسل',
-          '',
-          'رقم الوصل',
-          'الشركة',
-          'التاريخ',
-          'المبلغ',
-          'الطريقة/التصنيف',
-          'الحالة',
+          <ColSort key="seq" label="تسلسل" active={sortKey === 'seq'} dir={sortDir} onClick={() => toggleSort('received_at')} />,
+          <span key="all" className="inline-flex items-center gap-2">
+            <Checkbox checked={allFilteredSelected} onCheckedChange={(v) => toggleSelectAll(!!v)} aria-label="تحديد الكل" />
+            تحديد الكل
+          </span>,
+          <ColSort key="num" label="رقم الوصل" active={sortKey === 'receipt_number'} dir={sortDir} onClick={() => toggleSort('receipt_number')} />,
+          <ColSort key="co" label="الشركة" active={sortKey === 'company'} dir={sortDir} onClick={() => toggleSort('company')} />,
+          <ColSort key="dt" label="التاريخ" active={sortKey === 'received_at'} dir={sortDir} onClick={() => toggleSort('received_at')} />,
+          <ColSort key="amt" label="المبلغ" active={sortKey === 'amount'} dir={sortDir} onClick={() => toggleSort('amount')} />,
+          <ColSort key="meth" label="طريقة القبض" active={sortKey === 'method'} dir={sortDir} onClick={() => toggleSort('method')} />,
+          <ColSort key="cat" label="التصنيف" active={sortKey === 'category'} dir={sortDir} onClick={() => toggleSort('category')} />,
+          <ColSort key="desc" label="البيان" active={sortKey === 'description'} dir={sortDir} onClick={() => toggleSort('description')} />,
+          <ColSort key="st" label="الحالة" active={sortKey === 'status'} dir={sortDir} onClick={() => toggleSort('status')} />,
           'الإجراءات',
         ]}
       >
-        <tr className="bg-slate-50 text-xs text-slate-500">
-          <td className="p-2" colSpan={9}>
-            اضغط عناوين الأعمدة للترتيب — النتائج الحالية: {filtered.length}
-            <span className="inline-flex gap-2 mr-3">
-              <button type="button" className="underline" onClick={() => toggleSort('receipt_number')}>
-                رقم الوصل <SortBtn active={sortKey === 'receipt_number'} dir={sortDir} onClick={() => toggleSort('receipt_number')} />
-              </button>
-              <button type="button" className="underline" onClick={() => toggleSort('company')}>
-                الشركة
-              </button>
-              <button type="button" className="underline" onClick={() => toggleSort('received_at')}>
-                التاريخ
-              </button>
-              <button type="button" className="underline" onClick={() => toggleSort('amount')}>
-                المبلغ
-              </button>
-            </span>
-          </td>
-        </tr>
         {filtered.map((x, idx) => (
           <tr key={x.id} className={`border-t ${x.deleted ? 'opacity-60' : ''}`}>
             <td className="p-3 font-mono">{idx + 1}</td>
@@ -569,39 +647,26 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
             </td>
             <td className="p-3 font-mono font-bold">{x.receipt_number}</td>
             <td>{companyName(x.company_id)}</td>
-            <td>{x.received_at}</td>
+            <td className="font-mono">{x.received_at}</td>
             <td>{money(x.amount)}</td>
-            <td>
-              {x.receipt_method}
-              <small className="block">{x.category}</small>
-            </td>
+            <td>{x.receipt_method}</td>
+            <td>{x.category || '—'}</td>
+            <td className="max-w-48 whitespace-normal text-sm">{x.description || '—'}</td>
             <td>
               <StatusBadge value={x.deleted || x.status === 'cancelled' ? 'cancelled' : 'active'} />
             </td>
             <td className="print:hidden">
               <div className="flex flex-wrap gap-1">
-                <Button type="button" size="sm" variant="outline" onClick={() => viewVoucher(x)}>
-                  <Eye className="w-3.5 h-3.5 ml-1" />
-                  عرض الوصل
-                </Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => void pdfVoucher(x)}>
-                  <FileDown className="w-3.5 h-3.5 ml-1" />
-                  PDF
-                </Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => printVoucher(x)}>
-                  <Printer className="w-3.5 h-3.5 ml-1" />
-                  طباعة
-                </Button>
+                <ActionButton label="عرض الوصل" icon={Eye} onClick={() => viewVoucher(x)} />
+                <ActionButton label="PDF" icon={FileDown} onClick={() => void pdfVoucher(x)} />
+                <ActionButton label="طباعة" icon={Printer} onClick={() => printVoucher(x)} />
                 {x.attachment_key && (
                   <Button size="icon" variant="ghost" onClick={() => financialErpApi.openDocument(x.attachment_key!)}>
                     <Eye className="w-4 h-4" />
                   </Button>
                 )}
                 {!x.deleted && x.remaining > 0 && can('financial.revenues.edit') && (
-                  <Button size="sm" variant="outline" onClick={() => openAllocation(x)}>
-                    <Wallet className="w-4 h-4 ml-1" />
-                    تخصيص
-                  </Button>
+                  <ActionButton label="تخصيص" icon={Wallet} onClick={() => openAllocation(x)} />
                 )}
                 {!x.deleted && can('financial.revenues.edit') && (
                   <Button size="icon" variant="ghost" onClick={() => openEdit(x)}>
@@ -623,17 +688,14 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
                   </Button>
                 )}
                 {x.deleted && can('financial.revenues.restore') && (
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <ActionButton
+                    label="إعادة تفعيل"
+                    icon={RotateCcw}
                     onClick={async () => {
                       await financialErpApi.restoreRevenue(x.id);
                       await load();
                     }}
-                  >
-                    <RotateCcw className="w-4 h-4 ml-1" />
-                    إعادة تفعيل
-                  </Button>
+                  />
                 )}
               </div>
             </td>
@@ -641,7 +703,7 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
         ))}
         {!filtered.length && (
           <tr>
-            <td colSpan={9}>
+            <td colSpan={11}>
               <Empty title="لا نتائج" description="عدّل البحث أو الفلاتر." />
             </td>
           </tr>
@@ -675,7 +737,7 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
           <Field label="التصنيف">
             <Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
           </Field>
-          <Field label="وصف الإيراد" className="md:col-span-2">
+          <Field label="البيان / الوصف" className="md:col-span-2">
             <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </Field>
           <Field label="من فترة">
@@ -758,10 +820,10 @@ export function RevenuesPage({ companies, can, notify, success }: Props) {
         </Button>
       </FormDialog>
 
-      <FormDialog open={!!viewRow} onOpenChange={(v) => !v && setViewRow(undefined)} title={`عرض وصل ${viewRow?.receipt_number || ''}`} className="max-w-3xl">
+      <FormDialog open={!!viewRow} onOpenChange={(v) => !v && setViewRow(undefined)} title={`عرض وصل ${viewRow?.receipt_number || ''}`} className="max-w-5xl">
         {viewRow && (
           <div className="space-y-3">
-            <iframe title="وصل قبض" className="w-full h-[65vh] border rounded-xl bg-white" srcDoc={receiptHtml(viewRow, 'view')} />
+            <iframe title="وصل قبض" className="w-full h-[75vh] border rounded-xl bg-white" srcDoc={receiptHtml(viewRow, 'view')} />
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" onClick={() => printVoucher(viewRow)}>
                 <Printer className="w-4 h-4 ml-2" />
@@ -802,18 +864,23 @@ export function ExpensesPage({ can, notify, success }: Props) {
   const [deleted, setDeleted] = useState(false);
   const [q, setQ] = useState('');
   const [category, setCategory] = useState('');
+  const [descriptionF, setDescriptionF] = useState('');
   const [payee, setPayee] = useState('');
   const [person, setPerson] = useState('');
   const [companyNameF, setCompanyNameF] = useState('');
   const [payMethod, setPayMethod] = useState('');
   const [minAmt, setMinAmt] = useState('');
   const [maxAmt, setMaxAmt] = useState('');
-  const [sortKey, setSortKey] = useState<'expense_date' | 'amount' | 'payment_number' | 'payee' | 'category'>('expense_date');
+  const [statusF, setStatusF] = useState<'all' | 'active' | 'cancelled'>('all');
+  const [sortKey, setSortKey] = useState<
+    'expense_date' | 'amount' | 'payment_number' | 'payee' | 'person' | 'company' | 'category' | 'description' | 'status'
+  >('expense_date');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Expense>();
   const [form, setForm] = useState<any>(blankExpense);
   const [selected, setSelected] = useState<number[]>([]);
+  const [zipBusy, setZipBusy] = useState(false);
   const [previewForm, setPreviewForm] = useState(false);
   const [viewRow, setViewRow] = useState<Expense>();
   const [voucher, setVoucher] = useState<{ next_pay: number; preview_pay: string } | null>(null);
@@ -840,7 +907,11 @@ export function ExpensesPage({ can, notify, success }: Props) {
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     let list = rows.filter((r) => {
+      const cancelled = r.deleted || r.status === 'cancelled';
+      if (statusF === 'active' && cancelled) return false;
+      if (statusF === 'cancelled' && !cancelled) return false;
       if (category && !(r.category || '').includes(category)) return false;
+      if (descriptionF && !(r.description || '').includes(descriptionF)) return false;
       if (payee && !(r.payee || '').includes(payee)) return false;
       if (person && !(r.person_name || '').includes(person)) return false;
       if (companyNameF && !(r.company_name || '').includes(companyNameF)) return false;
@@ -870,13 +941,21 @@ export function ExpensesPage({ can, notify, success }: Props) {
     const dir = sortDir === 'asc' ? 1 : -1;
     list = [...list].sort((a, b) => {
       if (sortKey === 'amount') return (a.amount - b.amount) * dir;
-      if (sortKey === 'payment_number') return String(a.payment_number || '').localeCompare(String(b.payment_number || ''), 'ar') * dir;
+      if (sortKey === 'payment_number') return String(a.payment_number || '').localeCompare(String(b.payment_number || ''), 'en') * dir;
       if (sortKey === 'payee') return String(a.payee || '').localeCompare(String(b.payee || ''), 'ar') * dir;
+      if (sortKey === 'person') return String(a.person_name || '').localeCompare(String(b.person_name || ''), 'ar') * dir;
+      if (sortKey === 'company') return String(a.company_name || '').localeCompare(String(b.company_name || ''), 'ar') * dir;
       if (sortKey === 'category') return String(a.category || '').localeCompare(String(b.category || ''), 'ar') * dir;
+      if (sortKey === 'description') return String(a.description || '').localeCompare(String(b.description || ''), 'ar') * dir;
+      if (sortKey === 'status') {
+        const as = a.deleted || a.status === 'cancelled' ? 1 : 0;
+        const bs = b.deleted || b.status === 'cancelled' ? 1 : 0;
+        return (as - bs) * dir;
+      }
       return String(a.expense_date).localeCompare(String(b.expense_date)) * dir;
     });
     return list;
-  }, [rows, q, category, payee, person, companyNameF, payMethod, minAmt, maxAmt, sortKey, sortDir]);
+  }, [rows, q, category, descriptionF, payee, person, companyNameF, payMethod, minAmt, maxAmt, statusF, sortKey, sortDir]);
 
   const toggleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -886,6 +965,31 @@ export function ExpensesPage({ can, notify, success }: Props) {
     }
   };
 
+  const resetFilters = () => {
+    setQ('');
+    setCategory('');
+    setDescriptionF('');
+    setPayee('');
+    setPerson('');
+    setCompanyNameF('');
+    setPayMethod('');
+    setMinAmt('');
+    setMaxAmt('');
+    setFrom('');
+    setTo('');
+    setYear(now.getFullYear());
+    setMonth(now.getMonth() + 1);
+    setStatusF('all');
+    setDeleted(false);
+    setSelected([]);
+  };
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((x) => selected.includes(x.id));
+  const toggleSelectAll = (on: boolean) => {
+    if (on) setSelected(filtered.map((x) => x.id));
+    else setSelected([]);
+  };
+
   const logo = () => resolveAssetUrl(brand.report_logo || brand.system_logo);
   const paymentHtml = (row: Expense, mode: 'view' | 'print' | 'pdf') =>
     paymentVoucherHtml({ brand, logoUrl: logo(), mode, row });
@@ -893,7 +997,7 @@ export function ExpensesPage({ can, notify, success }: Props) {
   const viewVoucher = (row: Expense) => setViewRow(row);
   const printVoucher = (row: Expense) => {
     try {
-      openVoucherWindow(paymentHtml(row, 'print'), true);
+      openVoucherWindow(paymentHtml(row, 'print'));
     } catch (e) {
       notify(e);
     }
@@ -904,6 +1008,33 @@ export function ExpensesPage({ can, notify, success }: Props) {
       success(`تم تنزيل PDF للوصل ${row.payment_number}`);
     } catch (e) {
       notify(e);
+    }
+  };
+
+  const exportZip = async () => {
+    if (!selected.length) {
+      notify(new Error('حدّد وصولًا واحدًا على الأقل قبل تصدير ZIP'));
+      return;
+    }
+    const picks = filtered.filter((x) => selected.includes(x.id));
+    if (!picks.length) {
+      notify(new Error('الوصولات المحددة غير ظاهرة ضمن النتائج الحالية'));
+      return;
+    }
+    setZipBusy(true);
+    try {
+      await downloadVoucherPdfZip(
+        picks.map((row) => ({
+          html: paymentHtml(row, 'pdf'),
+          filename: `${row.payment_number || `PAY-${row.id}`}.pdf`,
+        })),
+        `PAY-vouchers-${today()}.zip`,
+      );
+      success(`تم تنزيل ZIP يحتوي ${picks.length} ملف PDF`);
+    } catch (e) {
+      notify(e);
+    } finally {
+      setZipBusy(false);
     }
   };
 
@@ -1043,6 +1174,10 @@ export function ExpensesPage({ can, notify, success }: Props) {
                 وصل صرف
               </Button>
             )}
+            <Button type="button" variant="outline" disabled={zipBusy} onClick={() => void exportZip()}>
+              <FileDown className="w-4 h-4 ml-1" />
+              {zipBusy ? 'جاري ZIP…' : 'تصدير الوصولات PDF'}
+            </Button>
             {can('financial.reports.xlsx') && (
               <Button
                 variant="outline"
@@ -1090,6 +1225,7 @@ export function ExpensesPage({ can, notify, success }: Props) {
             <Input className="w-full" type="number" value={month} onChange={(e) => setMonth(e.target.value ? Number(e.target.value) : '')} />
           </Field>
           <Input placeholder="التصنيف" value={category} onChange={(e) => setCategory(e.target.value)} />
+          <Input placeholder="البيان / الوصف" value={descriptionF} onChange={(e) => setDescriptionF(e.target.value)} />
           <Input placeholder="دُفع إلى" value={payee} onChange={(e) => setPayee(e.target.value)} />
           <Input placeholder="اسم الشخص" value={person} onChange={(e) => setPerson(e.target.value)} />
           <Input placeholder="اسم الشركة" value={companyNameF} onChange={(e) => setCompanyNameF(e.target.value)} />
@@ -1098,10 +1234,18 @@ export function ExpensesPage({ can, notify, success }: Props) {
           <SafeDateInput value={to} onChange={(e) => { setTo(e.target.value); setYear(''); setMonth(''); }} />
           <Input type="number" placeholder="من مبلغ" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} />
           <Input type="number" placeholder="إلى مبلغ" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} />
+          <select className="h-10 border rounded-md px-3" value={statusF} onChange={(e) => setStatusF(e.target.value as typeof statusF)}>
+            <option value="all">كل الحالات</option>
+            <option value="active">فعال</option>
+            <option value="cancelled">ملغى</option>
+          </select>
+          <Button type="button" variant="ghost" onClick={resetFilters}>
+            مسح الفلاتر
+          </Button>
           {can('financial.expenses.restore') && (
             <label className="flex gap-2 items-center text-sm">
               <input type="checkbox" checked={deleted} onChange={(e) => setDeleted(e.target.checked)} />
-              إظهار الملغى
+              تحميل الملغى من الخادم
             </label>
           )}
         </CardContent>
@@ -1112,28 +1256,26 @@ export function ExpensesPage({ can, notify, success }: Props) {
           <b className="block text-2xl text-red-700">{money(filtered.filter((x) => !x.deleted).reduce((a, x) => a + x.amount, 0))}</b>
         </CardContent>
       </Card>
-      <CompactTable headers={['تسلسل', '', 'رقم الوصل', 'التاريخ', 'دُفع إلى', 'التصنيف', 'المبلغ', 'الحالة', 'الإجراءات']}>
-        <tr className="bg-slate-50 text-xs text-slate-500">
-          <td className="p-2" colSpan={9}>
-            ترتيب:{' '}
-            <button type="button" className="underline mx-1" onClick={() => toggleSort('payment_number')}>
-              الرقم
-            </button>
-            <button type="button" className="underline mx-1" onClick={() => toggleSort('expense_date')}>
-              التاريخ
-            </button>
-            <button type="button" className="underline mx-1" onClick={() => toggleSort('payee')}>
-              المستفيد
-            </button>
-            <button type="button" className="underline mx-1" onClick={() => toggleSort('category')}>
-              التصنيف
-            </button>
-            <button type="button" className="underline mx-1" onClick={() => toggleSort('amount')}>
-              المبلغ
-            </button>
-            — النتائج: {filtered.length}
-          </td>
-        </tr>
+      <p className="text-sm text-slate-500">النتائج: {formatLatn(filtered.length, { maximumFractionDigits: 0 })} · محدد: {formatLatn(selected.length, { maximumFractionDigits: 0 })}</p>
+      <CompactTable
+        headers={[
+          <ColSort key="seq" label="تسلسل" active={false} dir={sortDir} onClick={() => toggleSort('expense_date')} />,
+          <span key="all" className="inline-flex items-center gap-2">
+            <Checkbox checked={allFilteredSelected} onCheckedChange={(v) => toggleSelectAll(!!v)} aria-label="تحديد الكل" />
+            تحديد الكل
+          </span>,
+          <ColSort key="num" label="رقم الوصل" active={sortKey === 'payment_number'} dir={sortDir} onClick={() => toggleSort('payment_number')} />,
+          <ColSort key="dt" label="التاريخ" active={sortKey === 'expense_date'} dir={sortDir} onClick={() => toggleSort('expense_date')} />,
+          <ColSort key="payee" label="دُفع إلى" active={sortKey === 'payee'} dir={sortDir} onClick={() => toggleSort('payee')} />,
+          <ColSort key="person" label="اسم الشخص" active={sortKey === 'person'} dir={sortDir} onClick={() => toggleSort('person')} />,
+          <ColSort key="co" label="اسم الشركة" active={sortKey === 'company'} dir={sortDir} onClick={() => toggleSort('company')} />,
+          <ColSort key="cat" label="التصنيف" active={sortKey === 'category'} dir={sortDir} onClick={() => toggleSort('category')} />,
+          <ColSort key="desc" label="البيان" active={sortKey === 'description'} dir={sortDir} onClick={() => toggleSort('description')} />,
+          <ColSort key="amt" label="المبلغ" active={sortKey === 'amount'} dir={sortDir} onClick={() => toggleSort('amount')} />,
+          <ColSort key="st" label="الحالة" active={sortKey === 'status'} dir={sortDir} onClick={() => toggleSort('status')} />,
+          'الإجراءات',
+        ]}
+      >
         {filtered.map((x, idx) => (
           <tr key={x.id} className={`border-t ${x.deleted ? 'opacity-60' : ''}`}>
             <td className="p-3 font-mono">{idx + 1}</td>
@@ -1144,35 +1286,21 @@ export function ExpensesPage({ can, notify, success }: Props) {
               />
             </td>
             <td className="p-3 font-mono font-bold">{x.payment_number || '-'}</td>
-            <td>{x.expense_date}</td>
-            <td>
-              {x.payee || '-'}
-              <small className="block">
-                {x.person_name || '-'} · {x.company_name || '-'} · {x.payment_method}
-              </small>
-            </td>
-            <td>
-              {x.category}
-              <small className="block max-w-56 whitespace-normal">{x.description}</small>
-            </td>
+            <td className="font-mono">{x.expense_date}</td>
+            <td>{x.payee || '—'}</td>
+            <td>{x.person_name || '—'}</td>
+            <td>{x.company_name || '—'}</td>
+            <td>{x.category}</td>
+            <td className="max-w-48 whitespace-normal text-sm">{x.description}</td>
             <td>{money(x.amount)}</td>
             <td>
               <StatusBadge value={x.deleted || x.status === 'cancelled' ? 'cancelled' : 'active'} />
             </td>
             <td className="print:hidden">
               <div className="flex flex-wrap gap-1">
-                <Button type="button" size="sm" variant="outline" onClick={() => viewVoucher(x)}>
-                  <Eye className="w-3.5 h-3.5 ml-1" />
-                  عرض الوصل
-                </Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => void pdfVoucher(x)}>
-                  <FileDown className="w-3.5 h-3.5 ml-1" />
-                  PDF
-                </Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => printVoucher(x)}>
-                  <Printer className="w-3.5 h-3.5 ml-1" />
-                  طباعة
-                </Button>
+                <ActionButton label="عرض الوصل" icon={Eye} onClick={() => viewVoucher(x)} />
+                <ActionButton label="PDF" icon={FileDown} onClick={() => void pdfVoucher(x)} />
+                <ActionButton label="طباعة" icon={Printer} onClick={() => printVoucher(x)} />
                 {x.receipt_key && (
                   <Button size="icon" variant="ghost" onClick={() => financialErpApi.openDocument(x.receipt_key!)}>
                     <Eye className="w-4 h-4" />
@@ -1198,17 +1326,14 @@ export function ExpensesPage({ can, notify, success }: Props) {
                   </Button>
                 )}
                 {x.deleted && can('financial.expenses.restore') && (
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <ActionButton
+                    label="إعادة تفعيل"
+                    icon={RotateCcw}
                     onClick={async () => {
                       await financialErpApi.restoreExpense(x.id);
                       await load();
                     }}
-                  >
-                    <RotateCcw className="w-4 h-4 ml-1" />
-                    إعادة تفعيل
-                  </Button>
+                  />
                 )}
               </div>
             </td>
@@ -1216,7 +1341,7 @@ export function ExpensesPage({ can, notify, success }: Props) {
         ))}
         {!filtered.length && (
           <tr>
-            <td colSpan={9}>
+            <td colSpan={12}>
               <Empty title="لا نتائج" description="عدّل البحث أو الفلاتر." />
             </td>
           </tr>
@@ -1291,10 +1416,10 @@ export function ExpensesPage({ can, notify, success }: Props) {
         })()}
       </FormDialog>
 
-      <FormDialog open={!!viewRow} onOpenChange={(v) => !v && setViewRow(undefined)} title={`عرض وصل ${viewRow?.payment_number || ''}`} className="max-w-3xl">
+      <FormDialog open={!!viewRow} onOpenChange={(v) => !v && setViewRow(undefined)} title={`عرض وصل ${viewRow?.payment_number || ''}`} className="max-w-5xl">
         {viewRow && (
           <div className="space-y-3">
-            <iframe title="وصل صرف" className="w-full h-[65vh] border rounded-xl bg-white" srcDoc={paymentHtml(viewRow, 'view')} />
+            <iframe title="وصل صرف" className="w-full h-[75vh] border rounded-xl bg-white" srcDoc={paymentHtml(viewRow, 'view')} />
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" onClick={() => printVoucher(viewRow)}>
                 <Printer className="w-4 h-4 ml-2" />

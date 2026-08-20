@@ -33,7 +33,7 @@ class LocalLoginResponse(BaseModel):
 
 class PasswordResetRequestIn(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
-    channel: str | None = Field(default=None, description="email | phone | auto")
+    channel: str | None = Field(default=None, description="deprecated")
 
 
 class PasswordResetConfirmIn(BaseModel):
@@ -42,9 +42,21 @@ class PasswordResetConfirmIn(BaseModel):
     new_password: str = Field(..., min_length=6, max_length=200)
 
 
+class BackupCodeResetIn(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
+    code: str = Field(..., min_length=8, max_length=40)
+    new_password: str = Field(..., min_length=6, max_length=200)
+
+
 class SuperAdminRecoveryIn(BaseModel):
     recovery_secret: str = Field(..., min_length=8, max_length=200)
     new_password: str = Field(..., min_length=8, max_length=200)
+
+
+OTP_DISABLED_DETAIL = (
+    "استعادة كلمة المرور عبر OTP/البريد/الهاتف معطّلة. "
+    "استخدم رمزًا احتياطيًا من إدارة المستخدمين، أو تواصل مع المدير."
+)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -121,10 +133,21 @@ async def local_login(data: LocalLoginRequest, db: AsyncSession = Depends(get_db
 
 @router.get("/password-reset/status")
 async def password_reset_status():
-    """System-level delivery readiness (no user enumeration)."""
-    from services.password_reset import delivery_status
-
-    return delivery_status()
+    """OTP delivery disabled — clients should use backup codes."""
+    return {
+        "otp_enabled": False,
+        "backup_codes_enabled": True,
+        "email_delivery_available": False,
+        "sms_delivery_available": False,
+        "dev_echo_enabled": False,
+        "message": OTP_DISABLED_DETAIL,
+        "required_env": {
+            "email": [],
+            "sms": [],
+            "emergency": ["SUPER_ADMIN_RECOVERY_SECRET"],
+            "forbidden_in_production": ["PASSWORD_RESET_DEV_ECHO"],
+        },
+    }
 
 
 @router.post("/password-reset/request")
@@ -133,15 +156,7 @@ async def password_reset_request(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    await ensure_schema()
-    from services.password_reset import request_password_reset
-
-    return await request_password_reset(
-        db,
-        username=data.username,
-        channel=data.channel,
-        request_ip=_client_ip(request),
-    )
+    raise HTTPException(status_code=410, detail=OTP_DISABLED_DETAIL)
 
 
 @router.post("/password-reset/confirm")
@@ -150,13 +165,22 @@ async def password_reset_confirm(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    await ensure_schema()
-    from services.password_reset import confirm_password_reset
+    raise HTTPException(status_code=410, detail=OTP_DISABLED_DETAIL)
 
-    return await confirm_password_reset(
+
+@router.post("/password-reset/backup-code")
+async def password_reset_with_backup_code(
+    data: BackupCodeResetIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await ensure_schema()
+    from services.backup_codes import consume_backup_code_and_reset_password
+
+    return await consume_backup_code_and_reset_password(
         db,
         username=data.username,
-        otp=data.otp,
+        code=data.code,
         new_password=data.new_password,
         request_ip=_client_ip(request),
     )

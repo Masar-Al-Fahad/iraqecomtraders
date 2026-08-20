@@ -98,6 +98,32 @@ async def download_backup(
     )
 
 
+@router.get("/restore-secret/status")
+async def restore_secret_status_endpoint(
+    _user: UserResponse = Depends(require_permission("backups.view")),
+    db: AsyncSession = Depends(get_db),
+):
+    from services.restore_secret import restore_secret_status
+
+    return await restore_secret_status(db)
+
+
+class RestoreSecretIn(BaseModel):
+    new_secret: str = Field(..., min_length=6, max_length=200)
+
+
+@router.put("/restore-secret")
+async def set_restore_secret_endpoint(
+    data: RestoreSecretIn,
+    user: UserResponse = Depends(require_permission("backups.manage_restore_secret")),
+    db: AsyncSession = Depends(get_db),
+):
+    from services.restore_secret import set_restore_secret
+
+    actor = await resolve_actor_name(db, user)
+    return await set_restore_secret(db, new_secret=data.new_secret, actor=actor)
+
+
 @router.post("/{backup_id}/restore-request")
 async def request_restore(
     backup_id: int,
@@ -105,8 +131,9 @@ async def request_restore(
     user: UserResponse = Depends(require_permission("backups.restore")),
     db: AsyncSession = Depends(get_db),
 ):
-    if data.confirmation != "RESTORE":
-        raise HTTPException(400, "اكتب RESTORE حرفيًا لتأكيد طلب الاستعادة")
+    from services.restore_secret import verify_restore_confirmation
+
+    await verify_restore_confirmation(db, data.confirmation)
     if not (data.notes or "").strip():
         raise HTTPException(400, "سبب الاستعادة مطلوب")
     target = await db.get(FinancialBackup, backup_id)

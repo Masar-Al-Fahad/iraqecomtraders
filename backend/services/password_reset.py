@@ -76,8 +76,16 @@ def delivery_status() -> dict[str, Any]:
         "super_admin_recovery_configured": bool((os.getenv("SUPER_ADMIN_RECOVERY_SECRET") or "").strip()),
         "message": (
             "قنوات الإرسال تعتمد على إعدادات الخادم. "
-            "البريد يحتاج SMTP_* والهاتف يحتاج SMS_WEBHOOK_URL."
+            "البريد يحتاج SMTP_HOST وSMTP_FROM وSMTP_PORT وSMTP_USER وSMTP_PASSWORD وSMTP_TLS. "
+            "الهاتف يحتاج SMS_WEBHOOK_URL (واختياريًا SMS_WEBHOOK_TOKEN). "
+            "PASSWORD_RESET_DEV_ECHO ممنوع في Production."
         ),
+        "required_env": {
+            "email": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_TLS"],
+            "sms": ["SMS_WEBHOOK_URL", "SMS_WEBHOOK_TOKEN"],
+            "emergency": ["SUPER_ADMIN_RECOVERY_SECRET"],
+            "forbidden_in_production": ["PASSWORD_RESET_DEV_ECHO"],
+        },
     }
 
 

@@ -1,7 +1,7 @@
 """Admin panel users management - create/edit/delete/activate with permissions."""
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -26,38 +26,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/users", tags=["admin-users"])
 
 
-class PermissionsModel(BaseModel):
-    view: bool = False
-    add: bool = False
-    edit: bool = False
-    delete: bool = False
-    export: bool = False
-    manage_users: bool = False
-    manage_brand_settings: bool = False
-    manage_registration_form_settings: bool = False
-    manage_memberships: bool = False
-    monthly_entry: bool = False
-    view_companies: bool = False
-    manage_companies_contracts: bool = False
-    manage_member_company_accounts: bool = False
-    enter_expenses: bool = False
-    view_expenses: bool = False
-    view_revenue: bool = False
-    view_profits: bool = False
-    view_financial_reports: bool = False
-    view_statements: bool = False
-    export_excel: bool = False
-    print_pdf: bool = False
-    manage_users_permissions: bool = False
-    issue_distinguished_certificate: bool = False
-    view_audit_log: bool = False
-    manage_periods: bool = False
+def _coerce_permissions(raw: Any) -> Dict[str, bool]:
+    """Accept full PERMISSION_KEYS map (legacy + financial.* + backups.*)."""
+    if raw is None:
+        return normalize_permissions({})
+    if isinstance(raw, BaseModel):
+        raw = raw.model_dump()
+    if not isinstance(raw, dict):
+        return normalize_permissions({})
+    return normalize_permissions(raw)
 
 
 class PanelUserCreate(BaseModel):
     username: str = Field(..., min_length=2, max_length=100)
     password: str = Field(..., min_length=4, max_length=200)
-    permissions: PermissionsModel = Field(default_factory=PermissionsModel)
+    permissions: Dict[str, bool] = Field(default_factory=dict)
     is_active: bool = True
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=40)
@@ -67,7 +50,7 @@ class PanelUserCreate(BaseModel):
 class PanelUserUpdate(BaseModel):
     username: Optional[str] = Field(None, min_length=2, max_length=100)
     password: Optional[str] = Field(None, min_length=4, max_length=200)
-    permissions: Optional[PermissionsModel] = None
+    permissions: Optional[Dict[str, bool]] = None
     is_active: Optional[bool] = None
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=40)
@@ -77,7 +60,7 @@ class PanelUserUpdate(BaseModel):
 class PanelUserResponse(BaseModel):
     id: int
     username: str
-    permissions: PermissionsModel
+    permissions: Dict[str, bool]
     is_active: bool
     is_super_admin: bool = False
     email: Optional[str] = None
@@ -100,7 +83,7 @@ def serialize_user(user: PanelUser) -> PanelUserResponse:
     return PanelUserResponse(
         id=user.id,
         username=user.username,
-        permissions=PermissionsModel(**perms),
+        permissions=perms,
         is_active=bool(user.is_active),
         is_super_admin=bool(getattr(user, "is_super_admin", False)),
         email=getattr(user, "email", None),
@@ -147,10 +130,11 @@ async def create_user(
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="اسم المستخدم موجود مسبقاً")
 
+        perms = _coerce_permissions(data.permissions)
         user = PanelUser(
             username=username,
             password_hash=hash_password(data.password),
-            permissions=permissions_to_json(data.permissions.model_dump()),
+            permissions=permissions_to_json(perms),
             is_active=data.is_active,
             is_super_admin=False,
             email=(data.email or "").strip() or None,
@@ -164,9 +148,10 @@ async def create_user(
         add_audit(
             db, action="create", entity_type="panel_user", entity_id=user.id,
             actor=await resolve_actor_name(db, current_user),
-            new_values={"username": username, "permissions": data.permissions.model_dump(), "is_active": data.is_active},
+            new_values={"username": username, "permissions": perms, "is_active": data.is_active},
         )
         await db.commit()
+        await db.refresh(user)
         return serialize_user(user)
     except HTTPException:
         raise
@@ -211,7 +196,7 @@ async def update_user(
             user.password_hash = hash_password(data.password)
 
         if data.permissions is not None:
-            user.permissions = permissions_to_json(data.permissions.model_dump())
+            user.permissions = permissions_to_json(_coerce_permissions(data.permissions))
 
         if data.is_active is not None:
             user.is_active = data.is_active
@@ -235,6 +220,7 @@ async def update_user(
             },
         )
         await db.commit()
+        await db.refresh(user)
         return serialize_user(user)
     except HTTPException:
         raise
@@ -269,6 +255,7 @@ async def toggle_user_active(
             new_values={"is_active": bool(user.is_active)},
         )
         await db.commit()
+        await db.refresh(user)
         return serialize_user(user)
     except HTTPException:
         raise
@@ -276,6 +263,68 @@ async def toggle_user_active(
         await db.rollback()
         logger.error(f"Error toggling panel user: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="خطأ في تغيير حالة المستخدم")
+
+
+@router.post("/{user_id}/backup-codes")
+async def generate_user_backup_codes(
+    user_id: int,
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate 5 one-time backup codes (plaintext returned once). Revokes previous unused set."""
+    await ensure_schema()
+    from services.backup_codes import generate_backup_codes
+
+    result = await db.execute(select(PanelUser).where(PanelUser.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="المستخدم غير موجود")
+    return await generate_backup_codes(
+        db, user=user, actor=await resolve_actor_name(db, current_user),
+    )
+
+
+@router.get("/{user_id}/backup-codes/status")
+async def user_backup_codes_status(
+    user_id: int,
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
+    db: AsyncSession = Depends(get_db),
+):
+    await ensure_schema()
+    from services.backup_codes import backup_codes_status
+
+    result = await db.execute(select(PanelUser).where(PanelUser.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="المستخدم غير موجود")
+    return await backup_codes_status(db, user_id)
+
+
+class SetPasswordIn(BaseModel):
+    new_password: str = Field(..., min_length=6, max_length=200)
+
+
+@router.post("/{user_id}/set-password")
+async def set_user_password(
+    user_id: int,
+    data: SetPasswordIn,
+    current_user: UserResponse = Depends(require_any_permission("manage_users", "manage_users_permissions")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin/super-admin sets another user's password (hashed; never logged)."""
+    await ensure_schema()
+    from services.backup_codes import admin_set_password
+
+    result = await db.execute(select(PanelUser).where(PanelUser.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="المستخدم غير موجود")
+    return await admin_set_password(
+        db,
+        user=user,
+        new_password=data.new_password,
+        actor=await resolve_actor_name(db, current_user),
+    )
 
 
 @router.delete("/{user_id}")

@@ -6,7 +6,10 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 
-export const money=(value:number|string|undefined)=>`${Number(value||0).toLocaleString('ar-IQ',{maximumFractionDigits:3})} د.ع`;
+/** Western digits 0-9 only (display). Does not change stored values. */
+export const formatLatn=(value:number|string|undefined,opts?:Intl.NumberFormatOptions)=>
+  Number(value||0).toLocaleString('en-US',{maximumFractionDigits:3,...opts});
+export const money=(value:number|string|undefined)=>`${formatLatn(value)} د.ع`;
 export const statusLabel=(value:string)=>({
   active:'فعال',inactive:'غير فعال',suspended:'معلق',ended:'منتهي',draft:'مسودة',
   approved:'معتمد',settled:'تم التحاسب',unsettled:'غير محاسب',reversed:'معكوس',
@@ -54,11 +57,50 @@ export function SafeDateInput(props:Omit<ComponentProps<typeof Input>,'type'>){
   }}/>;
 }
 
-export function CompactTable({headers,children,printFriendly=false}:{headers:string[];children:ReactNode;printFriendly?:boolean}){
-  return <div className={`rounded-xl border bg-white ${printFriendly?'overflow-visible print:overflow-visible':'overflow-auto'}`}>
+export function CompactTable({headers,children,printFriendly=false}:{headers:(string|ReactNode)[];children:ReactNode;printFriendly?:boolean}){
+  return <div className={`rounded-xl border bg-[var(--mfec-card,#fff)] ${printFriendly?'overflow-visible print:overflow-visible':'overflow-auto'}`} style={{borderColor:'var(--mfec-border,#d5dbe3)'}}>
     <table className={`w-full text-sm ${printFriendly?'print:text-[10px] print:whitespace-normal whitespace-normal':'whitespace-nowrap'}`}>
-      <thead className="bg-slate-100 text-slate-700"><tr>{headers.map(x=><th key={x} className={`p-3 text-right font-semibold ${x==='اختيار'?'print:hidden':''}`}>{x}</th>)}</tr></thead>
-      <tbody>{children}</tbody>
+      <thead style={{background:'var(--mfec-table-header,#1e506b)',color:'#fff'}}><tr>{headers.map((x,i)=><th key={i} className="p-3 text-right font-semibold">{x}</th>)}</tr></thead>
+      <tbody className="[&>tr:nth-child(even)]:bg-[var(--mfec-table-alt,#F3F4F6)]">{children}</tbody>
     </table>
   </div>;
+}
+
+/** Compact icon+label action button matching membership-admin style. */
+export function ActionButton({
+  label,
+  icon: Icon,
+  onClick,
+  title,
+  variant = 'outline',
+  disabled,
+  className = '',
+}: {
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  onClick?: () => void;
+  title?: string;
+  variant?: 'outline' | 'ghost' | 'destructive' | 'default';
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={variant}
+      disabled={disabled}
+      title={title || label}
+      onClick={onClick}
+      className={`h-8 px-2 text-xs gap-1 border ${className}`}
+      style={
+        variant === 'default'
+          ? { background: 'var(--mfec-button)', borderColor: 'var(--mfec-button)', color: '#fff' }
+          : { borderColor: 'var(--mfec-border,#d5dbe3)' }
+      }
+    >
+      {Icon ? <Icon className="w-3.5 h-3.5" /> : null}
+      {label}
+    </Button>
+  );
 }

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.database import Base
+from models.app_settings import AppSetting  # noqa: F401 — needed for restore-secret lookups
 from models.financial import (
     FinancialBackup, FinancialCompany, MemberAccountItem, MemberCompanyAccount, MonthlyEntryLine,
     MonthlyStatement, PricingItem, PricingItemVersion, ReceiptAllocation,
@@ -140,17 +141,26 @@ async def test_private_backup_create_list_download_and_restore_request(db, monke
         return stored[path]
     monkeypatch.setattr("services.financial_backup.upload_private_financial_bytes",fake_upload)
     monkeypatch.setattr("routers.financial_backups.download_private_financial_bytes",fake_download)
-    admin=user(**{"backups.create":True,"backups.view":True,"backups.download":True,"backups.restore":True})
+    admin=user(**{"backups.create":True,"backups.view":True,"backups.download":True,"backups.restore":True,"backups.manage_restore_secret":True})
     created=await create_backup(BackupCreateIn(notes="اختبار"),user=admin,db=db)
     assert created["status"]=="ready" and created["size_bytes"]>0
     listed=await list_backups(False,_user=admin,db=db)
     assert listed["items"][0]["backup_number"]==created["backup_number"]
     response=await download_backup(created["id"],_user=admin,db=db)
     assert response.media_type=="application/gzip"
+    from services.restore_secret import set_restore_secret, verify_restore_confirmation
+    await set_restore_secret(db, new_secret="TestRestore1", actor="مختبر")
+    with pytest.raises(HTTPException) as blocked:
+        await request_restore(
+            created["id"],RestoreRequestIn(confirmation="RESTORE",notes="يجب أن يُرفض"),
+            user=admin,db=db,
+        )
+    assert blocked.value.status_code==400
     requested=await request_restore(
-        created["id"],RestoreRequestIn(confirmation="RESTORE",notes="اختبار آمن"),
+        created["id"],RestoreRequestIn(confirmation="TestRestore1",notes="اختبار آمن"),
         user=admin,db=db,
     )
     assert requested["status"]=="restore_requested"
     assert requested["pre_restore_backup_id"] != created["id"]
     assert len((await db.execute(select(FinancialBackup))).scalars().all())==2
+    await verify_restore_confirmation(db, "TestRestore1")

@@ -199,6 +199,9 @@ export default function AdminDashboard() {
   const selectedIds = Object.keys(selectedMap).map(Number);
   const [joinMsgOpen, setJoinMsgOpen] = useState(false);
   const [joinMsgTarget, setJoinMsgTarget] = useState<Registration | null>(null);
+  const [bulkWaOpen, setBulkWaOpen] = useState(false);
+  const [bulkWaIndex, setBulkWaIndex] = useState(0);
+  const [bulkWaMessage, setBulkWaMessage] = useState('مرحبًا {merchant_name}، نود التواصل معك بخصوص عضويتك في التجمع ({membership_number}).');
   const [nextMembership, setNextMembership] = useState('');
   const [nextMembershipPreview, setNextMembershipPreview] = useState('');
   const [savingNextMn, setSavingNextMn] = useState(false);
@@ -710,6 +713,35 @@ export default function AdminDashboard() {
     }
   };
 
+  const bulkWaTargets = Object.values(selectedMap).filter((r) => isValidPhoneForWhatsApp(r.phone));
+  const openBulkWhatsAppNotify = () => {
+    if (!selectedIds.length) {
+      toast({ title: 'تنبيه', description: 'حدد عضواً واحداً على الأقل', variant: 'destructive' });
+      return;
+    }
+    if (!bulkWaTargets.length) {
+      toast({ title: 'تنبيه', description: 'لا يوجد رقم واتساب صالح ضمن المحددين', variant: 'destructive' });
+      return;
+    }
+    setBulkWaIndex(0);
+    setBulkWaOpen(true);
+  };
+  const renderBulkWaMessage = (reg: Registration) =>
+    bulkWaMessage
+      .replaceAll('{merchant_name}', reg.merchant_name || '')
+      .replaceAll('{business_name}', reg.business_name || '')
+      .replaceAll('{membership_number}', reg.membership_number || '')
+      .replaceAll('{phone}', reg.phone || '');
+  const openCurrentBulkWhatsApp = () => {
+    const reg = bulkWaTargets[bulkWaIndex];
+    if (!reg) return;
+    openWhatsAppWithText(reg.phone, renderBulkWaMessage(reg));
+  };
+  const openNextBulkWhatsApp = () => {
+    openCurrentBulkWhatsApp();
+    if (bulkWaIndex < bulkWaTargets.length - 1) setBulkWaIndex((i) => i + 1);
+  };
+
   const openPrint = (_scope: 'filtered' | 'all') => {
     openExportDialog('print');
   };
@@ -1214,6 +1246,15 @@ export default function AdminDashboard() {
                     >
                       <Save className="w-4 h-4" /> حفظ {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
                     </Button>
+                    <Button
+                      onClick={openBulkWhatsAppNotify}
+                      disabled={selectedIds.length === 0}
+                      variant="outline"
+                      size="sm"
+                      className="flex items-center gap-1 text-green-700 border-green-200 hover:border-green-400"
+                    >
+                      <MessageCircle className="w-4 h-4" /> إشعار واتساب {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
+                    </Button>
                     <Button onClick={exportXLSX} variant="outline" size="sm" className="flex items-center gap-1 hover:border-[#C89B3C]">
                       <FileSpreadsheet className="w-4 h-4" /> تصدير Excel
                     </Button>
@@ -1417,6 +1458,53 @@ export default function AdminDashboard() {
             </Button>
             <p className="text-xs text-gray-500">
               واتساب ويب لا يدعم إرفاق الملف تلقائيًا — بعد التنزيل أرفق PDF يدويًا.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk WhatsApp notify (wa.me only — no Cloud API) */}
+      <Dialog open={bulkWaOpen} onOpenChange={setBulkWaOpen}>
+        <DialogContent className="max-w-lg" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-right">إشعار واتساب للأعضاء المحددين</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-right">
+            <p className="text-sm text-gray-600">
+              يفتح واتساب عبر wa.me واحدًا تلو الآخر (لا إرسال جماعي تلقائي). القوالب:{' '}
+              <code className="text-xs">{'{merchant_name}'}</code> · <code className="text-xs">{'{business_name}'}</code> ·{' '}
+              <code className="text-xs">{'{membership_number}'}</code>
+            </p>
+            <Textarea rows={4} value={bulkWaMessage} onChange={(e) => setBulkWaMessage(e.target.value)} />
+            {bulkWaTargets[bulkWaIndex] ? (
+              <div className="rounded-md border p-3 bg-slate-50 text-sm space-y-1">
+                <div>
+                  <b>
+                    {bulkWaIndex + 1} / {bulkWaTargets.length}
+                  </b>{' '}
+                  — {bulkWaTargets[bulkWaIndex].merchant_name} ({bulkWaTargets[bulkWaIndex].membership_number || '—'})
+                </div>
+                <div dir="ltr" className="font-mono text-xs">
+                  {bulkWaTargets[bulkWaIndex].phone}
+                </div>
+                <pre className="whitespace-pre-wrap text-xs text-slate-600 mt-2">{renderBulkWaMessage(bulkWaTargets[bulkWaIndex])}</pre>
+              </div>
+            ) : (
+              <p className="text-sm text-red-600">لا يوجد مستلم صالح</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" className="text-white" style={{ background: brand.button_color }} onClick={openCurrentBulkWhatsApp}>
+                فتح واتساب لهذا العضو
+              </Button>
+              <Button type="button" variant="outline" disabled={bulkWaIndex >= bulkWaTargets.length - 1} onClick={openNextBulkWhatsApp}>
+                فتح ثم الانتقال للتالي
+              </Button>
+              <Button type="button" variant="ghost" disabled={bulkWaIndex <= 0} onClick={() => setBulkWaIndex((i) => Math.max(0, i - 1))}>
+                السابق
+              </Button>
+            </div>
+            <p className="text-xs text-gray-500">
+              بدون WhatsApp Cloud API — كل فتح يحتاج تأكيدًا يدويًا داخل تطبيق واتساب.
             </p>
           </div>
         </DialogContent>

@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { useBrand } from '@/lib/brand';
 import { ROUTES } from '@/lib/routes';
 
-type Mode = 'login' | 'forgot' | 'otp';
+type Mode = 'login' | 'forgot';
 
 export default function AdminLogin() {
   const { toast } = useToast();
@@ -19,40 +19,16 @@ export default function AdminLogin() {
   const [mode, setMode] = useState<Mode>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [channel, setChannel] = useState<'auto' | 'email' | 'phone'>('auto');
-  const [otp, setOtp] = useState('');
+  const [backupCode, setBackupCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [masked, setMasked] = useState('');
   const [loading, setLoading] = useState(false);
-  const [delivery, setDelivery] = useState<{
-    email_delivery_available: boolean;
-    sms_delivery_available: boolean;
-    dev_echo_enabled: boolean;
-    message: string;
-  } | null>(null);
 
   useEffect(() => {
     if (localAuth.isLoggedIn()) {
       navigate(ROUTES.ADMIN, { replace: true });
     }
   }, [navigate]);
-
-  useEffect(() => {
-    if (mode === 'forgot' || mode === 'otp') {
-      client.auth
-        .passwordResetStatus()
-        .then((s) =>
-          setDelivery({
-            email_delivery_available: s.email_delivery_available,
-            sms_delivery_available: s.sms_delivery_available,
-            dev_echo_enabled: s.dev_echo_enabled,
-            message: s.message,
-          }),
-        )
-        .catch(() => setDelivery(null));
-    }
-  }, [mode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,73 +56,35 @@ export default function AdminLogin() {
     }
   };
 
-  const requestOtp = async (e: React.FormEvent) => {
+  const resetWithBackupCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) {
-      toast({ title: 'خطأ', description: 'أدخل اسم المستخدم', variant: 'destructive' });
+    if (!username.trim() || !backupCode.trim()) {
+      toast({ title: 'خطأ', description: 'أدخل اسم المستخدم والرمز الاحتياطي', variant: 'destructive' });
       return;
     }
-    if (channel === 'email' && delivery && !delivery.email_delivery_available) {
-      toast({
-        title: 'البريد غير مهيأ',
-        description: 'SMTP غير مضبوط على الخادم. لا يمكن إرسال OTP عبر البريد حتى تُضاف SMTP_HOST وSMTP_FROM وباقي متغيرات SMTP.',
-        variant: 'destructive',
-      });
-      return;
-    }
-    if (channel === 'phone' && delivery && !delivery.sms_delivery_available) {
-      toast({
-        title: 'الرسائل غير مهيأة',
-        description: 'SMS_WEBHOOK_URL غير مضبوط. لا يمكن إرسال OTP عبر الهاتف حتى يُعدّ مزود الرسائل.',
-        variant: 'destructive',
-      });
-      return;
-    }
-    if (channel === 'auto' && delivery && !delivery.email_delivery_available && !delivery.sms_delivery_available) {
-      toast({
-        title: 'لا توجد قناة إرسال',
-        description: 'لا SMTP ولا SMS مهيأين على الخادم. اطلب من المدير ضبط بيئة الإرسال أولًا.',
-        variant: 'destructive',
-      });
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await client.auth.requestPasswordReset(username.trim(), channel === 'auto' ? undefined : channel);
-      setMasked(res.destination_masked || '');
-      setMode('otp');
-      toast({
-        title: 'تم إرسال الطلب',
-        description: res.message || 'إن وُجد حساب مرتبط سيتم إرسال رمز التحقق.',
-      });
-    } catch (error: any) {
-      toast({ title: 'تعذر الطلب', description: error?.message || 'حاول لاحقًا', variant: 'destructive' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const confirmReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!otp.trim() || newPassword.length < 6 || newPassword !== confirmPassword) {
+    if (newPassword.length < 6 || newPassword !== confirmPassword) {
       toast({
         title: 'تحقق من الحقول',
-        description: 'أدخل OTP وكلمة مرور متطابقة لا تقل عن 6 أحرف',
+        description: 'كلمة مرور متطابقة لا تقل عن 6 أحرف',
         variant: 'destructive',
       });
       return;
     }
     setLoading(true);
     try {
-      const res = await client.auth.confirmPasswordReset(username.trim(), otp.trim(), newPassword);
+      const res = await client.auth.resetWithBackupCode(username.trim(), backupCode.trim(), newPassword);
       toast({ title: 'تم التحديث', description: res.message || 'يمكنك تسجيل الدخول الآن' });
       setMode('login');
       setPassword('');
-      setOtp('');
+      setBackupCode('');
       setNewPassword('');
       setConfirmPassword('');
     } catch (error: any) {
-      toast({ title: 'فشل التأكيد', description: error?.message || 'رمز غير صالح', variant: 'destructive' });
+      toast({
+        title: 'تعذر الاستعادة',
+        description: error?.message || 'تعذر التحقق من الرمز الاحتياطي',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }
@@ -171,7 +109,7 @@ export default function AdminLogin() {
               className="mx-auto w-20 h-20 object-contain"
             />
             <h1 className="text-xl font-bold" style={{ color: brand.primary_color }}>
-              {mode === 'login' ? 'تسجيل دخول الإدارة' : 'استعادة كلمة المرور'}
+              {mode === 'login' ? 'تسجيل دخول الإدارة' : 'استعادة بكلمة مرور احتياطية'}
             </h1>
             <p className="text-sm text-gray-500">{brand.system_name}</p>
             <p className="text-xs font-semibold" style={{ color: brand.secondary_color }}>
@@ -217,62 +155,31 @@ export default function AdminLogin() {
                 className="w-full text-sm text-slate-600 underline"
                 onClick={() => setMode('forgot')}
               >
-                نسيت كلمة المرور؟
+                نسيت كلمة المرور؟ (رمز احتياطي)
               </button>
             </form>
           )}
 
           {mode === 'forgot' && (
-            <form onSubmit={requestOtp} className="space-y-4 text-right">
+            <form onSubmit={resetWithBackupCode} className="space-y-4 text-right">
               <p className="text-sm text-slate-600">
-                أدخل اسم المستخدم واختر قناة الاسترداد المسجّلة (بريد أو هاتف). لن نكشف إن كان الحساب موجودًا.
+                استعادة كلمة المرور تتم عبر <b>رمز احتياطي لمرة واحدة</b> يصدره المدير من إدارة المستخدمين.
+                إرسال OTP بالبريد أو الهاتف معطّل.
               </p>
-              {delivery && (
-                <div className="rounded-md border bg-slate-50 p-3 text-xs text-slate-700 space-y-1">
-                  <p>البريد (SMTP): {delivery.email_delivery_available ? 'مفعّل على الخادم' : 'غير مهيأ — لن يصل OTP عبر البريد حتى تُضبط SMTP_*'}</p>
-                  <p>الهاتف (SMS): {delivery.sms_delivery_available ? 'مفعّل على الخادم' : 'غير مهيأ — لن يصل OTP عبر الهاتف حتى يُضبط SMS_WEBHOOK_URL'}</p>
-                  {delivery.dev_echo_enabled && (
-                    <p className="text-red-700 font-semibold">تحذير: PASSWORD_RESET_DEV_ECHO مفعّل — لا تستخدمه في Production.</p>
-                  )}
-                </div>
-              )}
               <div className="space-y-2">
                 <Label>اسم المستخدم</Label>
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} disabled={loading} />
               </div>
               <div className="space-y-2">
-                <Label>قناة الاسترداد</Label>
-                <select
-                  className="h-10 w-full border rounded-md px-3"
-                  value={channel}
-                  onChange={(e) => setChannel(e.target.value as typeof channel)}
-                >
-                  <option value="auto">تلقائي</option>
-                  <option value="email" disabled={delivery ? !delivery.email_delivery_available : false}>
-                    البريد الإلكتروني
-                  </option>
-                  <option value="phone" disabled={delivery ? !delivery.sms_delivery_available : false}>
-                    الهاتف
-                  </option>
-                </select>
-              </div>
-              <Button type="submit" className="w-full" disabled={loading} style={{ background: brand.button_color || brand.secondary_color }}>
-                {loading ? 'جاري الإرسال...' : 'إرسال رمز التحقق'}
-              </Button>
-              <button type="button" className="w-full text-sm underline" onClick={() => setMode('login')}>
-                العودة لتسجيل الدخول
-              </button>
-            </form>
-          )}
-
-          {mode === 'otp' && (
-            <form onSubmit={confirmReset} className="space-y-4 text-right">
-              <p className="text-sm text-slate-600">
-                أدخل الرمز المرسل{masked ? ` إلى ${masked}` : ''} ثم اختر كلمة مرور جديدة.
-              </p>
-              <div className="space-y-2">
-                <Label>رمز OTP</Label>
-                <Input dir="ltr" value={otp} onChange={(e) => setOtp(e.target.value)} disabled={loading} />
+                <Label>الرمز الاحتياطي</Label>
+                <Input
+                  dir="ltr"
+                  className="font-mono"
+                  placeholder="XXXX-XXXX-XXXX"
+                  value={backupCode}
+                  onChange={(e) => setBackupCode(e.target.value)}
+                  disabled={loading}
+                />
               </div>
               <div className="space-y-2">
                 <Label>كلمة المرور الجديدة</Label>
@@ -285,8 +192,8 @@ export default function AdminLogin() {
               <Button type="submit" className="w-full" disabled={loading} style={{ background: brand.button_color || brand.secondary_color }}>
                 {loading ? 'جاري الحفظ...' : 'تحديث كلمة المرور'}
               </Button>
-              <button type="button" className="w-full text-sm underline" onClick={() => setMode('forgot')}>
-                إعادة إرسال الرمز
+              <button type="button" className="w-full text-sm underline" onClick={() => setMode('login')}>
+                العودة لتسجيل الدخول
               </button>
             </form>
           )}
